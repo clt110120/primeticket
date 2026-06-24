@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prime Ticket — Prime Lanka Tours</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,sans-serif;}
+body{background:#f5f4f0;min-height:100vh;padding:32px 16px;}
+.wrap{max-width:640px;margin:0 auto;}
+.header{display:flex;align-items:center;gap:12px;margin-bottom:4px;}
+.hicon{width:40px;height:40px;background:#111;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;}
+.header h1{font-size:20px;font-weight:600;color:#111;}
+.hsub{font-size:12px;color:#999;margin-bottom:26px;padding-left:52px;}
+.card{background:#fff;border-radius:14px;border:0.5px solid rgba(0,0,0,0.1);padding:22px;margin-bottom:14px;}
+.step{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.07em;margin-bottom:14px;}
+.dz{border:1.5px dashed #ccc;border-radius:10px;padding:34px 20px;text-align:center;cursor:pointer;transition:all .15s;background:#fafaf8;}
+.dz:hover,.dz.over{border-color:#777;background:#f0efe9;}
+.dz-icon{font-size:34px;margin-bottom:10px;}
+.dz p{font-size:14px;color:#555;margin-bottom:3px;}
+.dz small{font-size:12px;color:#aaa;}
+input[type=file]{display:none;}
+.flist{margin-top:12px;display:flex;flex-direction:column;gap:7px;}
+.fi{display:flex;align-items:center;gap:9px;padding:9px 12px;background:#f8f7f3;border-radius:8px;font-size:13px;color:#222;}
+.fi span.name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fi .sz{font-size:11px;color:#999;white-space:nowrap;}
+.fi .rm{cursor:pointer;color:#ccc;padding:2px 5px;border-radius:4px;font-size:16px;line-height:1;}
+.fi .rm:hover{color:#e74c3c;background:#fef0ee;}
+.tip{font-size:12px;color:#aaa;margin-bottom:14px;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+.grid.one{grid-template-columns:1fr;}
+label{display:block;font-size:12px;color:#666;margin-bottom:4px;}
+input[type=text],select{width:100%;padding:8px 10px;font-size:13px;border:0.5px solid rgba(0,0,0,0.18);border-radius:8px;background:#fff;color:#111;outline:none;}
+input[type=text]:focus,select:focus{border-color:#555;}
+.crow{display:flex;gap:8px;align-items:center;}
+.crow input[type=text]{flex:1;}
+input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0,0,0.18);border-radius:6px;cursor:pointer;background:#fff;}
+.divider{border:none;border-top:0.5px solid #eee;margin:16px 0;}
+.brow{display:flex;gap:10px;justify-content:flex-end;}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 20px;font-size:14px;font-weight:500;border-radius:8px;border:0.5px solid rgba(0,0,0,0.15);background:transparent;color:#333;cursor:pointer;transition:all .12s;}
+.btn:hover{background:#f0efe9;}
+.btn.primary{background:#111;color:#fff;border-color:#111;}
+.btn.primary:hover{background:#333;}
+.btn.primary:disabled{background:#999;border-color:#999;cursor:not-allowed;}
+.sbox{border-radius:8px;padding:12px 14px;font-size:13px;margin-top:14px;display:none;}
+.sbox.show{display:block;}
+.sbox.info{background:#e8f0fd;color:#1a56db;border:0.5px solid #b4cafc;}
+.sbox.ok{background:#e8f5e9;color:#1b5e20;border:0.5px solid #a5d6a7;}
+.sbox.err{background:#fdecea;color:#b71c1c;border:0.5px solid #f5a3a3;}
+.prog{height:3px;background:#e0e0e0;border-radius:2px;margin-top:10px;overflow:hidden;display:none;}
+.prog.show{display:block;}
+.bar{height:100%;background:#111;border-radius:2px;width:0%;transition:width .4s;}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg);}}
+.foot{text-align:center;font-size:11px;color:#ccc;margin-top:22px;}
+@media(max-width:480px){.grid{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="hicon">✈</div>
+    <h1>Prime Ticket</h1>
+  </div>
+  <p class="hsub">Prime Lanka Tours &mdash; Puttalam</p>
+
+  <!-- Step 1 -->
+  <div class="card">
+    <p class="step">Step 1 — Upload itinerary PDF</p>
+    <div class="dz" id="dz" onclick="document.getElementById('fi').click()">
+      <div class="dz-icon">📄</div>
+      <p>Click or drag &amp; drop itinerary PDF(s) here</p>
+      <small>Trip.com, airline booking confirmations, agency itineraries</small>
+    </div>
+    <input type="file" id="fi" accept=".pdf" multiple onchange="addFiles(this.files)">
+    <div class="flist" id="flist"></div>
+  </div>
+
+  <!-- Step 2 -->
+  <div class="card">
+    <p class="step">Step 2 — Override details <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></p>
+    <p class="tip">Leave blank — details are auto-extracted from the PDF. Fill only what you want to change.</p>
+    <div class="grid">
+      <div><label>Passenger name</label><input type="text" id="f-pax" placeholder="Auto-extracted"></div>
+      <div><label>Title</label>
+        <select id="f-ttl"><option value="">Auto / None</option>
+          <option>MR</option><option>MRS</option><option>MS</option><option>DR</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid">
+      <div><label>Ticket number</label><input type="text" id="f-tkt" placeholder="Auto-extracted"></div>
+      <div><label>Booking reference</label><input type="text" id="f-pnr" placeholder="Auto-extracted"></div>
+    </div>
+    <div class="grid">
+      <div><label>Airline name</label><input type="text" id="f-air" placeholder="Auto-extracted"></div>
+      <div><label>Date of issue</label><input type="text" id="f-dt" placeholder="e.g. 25 Jun 2026"></div>
+    </div>
+    <div class="grid one">
+      <div><label>Brand colour</label>
+        <div class="crow">
+          <input type="text" id="f-col" placeholder="Auto-detected from airline e.g. #5C0632">
+          <input type="color" id="f-cpick" value="#111111"
+            oninput="document.getElementById('f-col').value=this.value">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="card">
+    <p class="step">Step 3 — Generate PDF</p>
+    <p class="tip">Groq AI reads your PDF, extracts all flight data, and generates a branded e-ticket.</p>
+    <div id="sbox" class="sbox"></div>
+    <div id="prog" class="prog"><div id="bar" class="bar"></div></div>
+    <div class="divider"></div>
+    <div class="brow">
+      <button class="btn" onclick="clearAll()">🗑 Clear</button>
+      <button class="btn primary" id="btn" onclick="run()" disabled>
+        ✨ Extract &amp; Generate PDF
+      </button>
+    </div>
+  </div>
+
+  <p class="foot">Powered by Groq AI (Llama 3.3) &nbsp;·&nbsp; Prime Lanka Tours &copy; 2026</p>
+</div>
+
+<script>
+let files = [];
+
+function addFiles(fl) {
+  for(const f of fl)
+    if(f.type==='application/pdf' && !files.find(x=>x.name===f.name)) files.push(f);
+  render();
+}
+function removeFile(i){ files.splice(i,1); render(); }
+function render(){
+  document.getElementById('flist').innerHTML = files.map((f,i)=>`
+    <div class="fi">
+      <span>📄</span>
+      <span class="name">${f.name}</span>
+      <span class="sz">${(f.size/1024).toFixed(0)} KB</span>
+      <span class="rm" onclick="removeFile(${i})">✕</span>
+    </div>`).join('');
+  document.getElementById('btn').disabled = files.length===0;
+}
+function clearAll(){
+  files=[];
+  render();
+  ['f-pax','f-tkt','f-pnr','f-air','f-dt','f-col'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('f-ttl').value='';
+  status('','');
+  progress(0);
+}
+function status(msg,type){
+  const el=document.getElementById('sbox');
+  el.className='sbox'+(type?' show '+type:'');
+  el.innerHTML=msg;
+}
+function progress(pct){
+  const w=document.getElementById('prog'),b=document.getElementById('bar');
+  w.className='prog'+(pct>0?' show':'');
+  b.style.width=pct+'%';
+}
+
+async function run(){
+  const btn=document.getElementById('btn');
+  btn.disabled=true;
+  btn.innerHTML='<span class="spin"></span> Processing...';
+  progress(15);
+  status('⏳ Sending PDF to Gemini for extraction...','info');
+
+  const fd=new FormData();
+  files.forEach(f=>fd.append('pdfs',f));
+  const map={passenger_name:'f-pax',title:'f-ttl',ticket_number:'f-tkt',
+    booking_ref:'f-pnr',airline_name:'f-air',date_of_issue:'f-dt',brand_hex:'f-col'};
+  for(const[k,id] of Object.entries(map)){
+    const v=document.getElementById(id).value.trim();
+    if(v) fd.append(k,v);
+  }
+
+  try{
+    progress(35);
+    const resp=await fetch('/generate',{method:'POST',body:fd});
+    progress(85);
+    if(!resp.ok){
+      const e=await resp.json();
+      throw new Error(e.error||'Server error');
+    }
+    const blob=await resp.blob();
+    const cd=resp.headers.get('Content-Disposition')||'';
+    const m=cd.match(/filename="?([^"]+)"?/);
+    const name=m?m[1]:'eticket.pdf';
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=name; a.click();
+    URL.revokeObjectURL(url);
+    progress(100);
+    status('✅ PDF downloaded! Check your downloads folder.','ok');
+    setTimeout(()=>progress(0),2000);
+  }catch(e){
+    status('❌ Error: '+e.message,'err');
+    progress(0);
+  }
+  btn.disabled=false;
+  btn.innerHTML='✨ Extract &amp; Generate PDF';
+}
+
+// drag & drop
+const dz=document.getElementById('dz');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files);});
+</script>
+</body>
+</html>
