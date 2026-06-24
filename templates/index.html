@@ -52,6 +52,9 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
 .bar{height:100%;background:#111;border-radius:2px;width:0%;transition:width .4s;}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;}
 @keyframes sp{to{transform:rotate(360deg);}}
+.logo-upload{position:relative;border:1.5px dashed #ccc;border-radius:8px;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:8px;min-height:52px;transition:all .15s;background:#fafaf8;}
+.logo-upload:hover{border-color:#888;background:#f0efe9;}
+.logo-upload.has-logo{border-style:solid;border-color:#aaa;background:#fff;}
 .foot{text-align:center;font-size:11px;color:#ccc;margin-top:22px;}
 @media(max-width:480px){.grid{grid-template-columns:1fr;}}
 </style>
@@ -105,6 +108,25 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
         </div>
       </div>
     </div>
+    <div class="grid one">
+      <div>
+        <label>Airline logo <span style="font-weight:400;color:#bbb;">(optional — PNG or JPG)</span></label>
+        <div class="logo-upload" id="logo-zone" onclick="document.getElementById('f-logo').click()">
+          <div id="logo-preview-wrap" style="display:none;">
+            <img id="logo-preview" src="" alt="logo preview"
+              style="max-height:48px;max-width:160px;object-fit:contain;display:block;margin:0 auto;">
+          </div>
+          <div id="logo-placeholder">
+            <span style="font-size:22px;">🖼️</span>
+            <span style="font-size:13px;color:#888;margin-left:8px;">Click to upload logo</span>
+          </div>
+          <span id="logo-rm" onclick="removeLogo(event)"
+            style="display:none;position:absolute;top:6px;right:8px;cursor:pointer;color:#aaa;font-size:16px;">✕</span>
+        </div>
+        <input type="file" id="f-logo" accept="image/png,image/jpeg,image/jpg"
+          onchange="handleLogo(this.files[0])">
+      </div>
+    </div>
   </div>
 
   <!-- Step 3 -->
@@ -127,6 +149,7 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
 
 <script>
 let files = [];
+let logoFile = null;
 
 function addFiles(fl) {
   for(const f of fl)
@@ -144,9 +167,34 @@ function render(){
     </div>`).join('');
   document.getElementById('btn').disabled = files.length===0;
 }
+
+function handleLogo(f) {
+  if(!f) return;
+  logoFile = f;
+  const url = URL.createObjectURL(f);
+  document.getElementById('logo-preview').src = url;
+  document.getElementById('logo-preview-wrap').style.display = 'block';
+  document.getElementById('logo-placeholder').style.display = 'none';
+  document.getElementById('logo-rm').style.display = 'block';
+  document.getElementById('logo-zone').classList.add('has-logo');
+}
+
+function removeLogo(e) {
+  e.stopPropagation();
+  logoFile = null;
+  document.getElementById('f-logo').value = '';
+  document.getElementById('logo-preview').src = '';
+  document.getElementById('logo-preview-wrap').style.display = 'none';
+  document.getElementById('logo-placeholder').style.display = 'flex';
+  document.getElementById('logo-rm').style.display = 'none';
+  document.getElementById('logo-zone').classList.remove('has-logo');
+}
+
 function clearAll(){
   files=[];
+  logoFile=null;
   render();
+  removeLogo({stopPropagation:()=>{}});
   ['f-pax','f-tkt','f-pnr','f-air','f-dt','f-col'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('f-ttl').value='';
   status('','');
@@ -172,6 +220,7 @@ async function run(){
 
   const fd=new FormData();
   files.forEach(f=>fd.append('pdfs',f));
+  if(logoFile) fd.append('logo', logoFile);
   const map={passenger_name:'f-pax',title:'f-ttl',ticket_number:'f-tkt',
     booking_ref:'f-pnr',airline_name:'f-air',date_of_issue:'f-dt',brand_hex:'f-col'};
   for(const[k,id] of Object.entries(map)){
