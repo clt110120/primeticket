@@ -27,7 +27,24 @@ AIRLINE_BRANDS = {
     "flydubai":           "#E0002A",
     "indigo":             "#1A1F71",
     "air arabia":         "#E31837",
+    "salam":              "#006400",
 }
+
+# Carry-on override rules — keyword in airline name → carry-on value
+# Default for all other airlines: 7 kg
+CARRYON_RULES = {
+    "air arabia": "10 kg",
+    "salam":      "5 kg",
+}
+DEFAULT_CARRYON = "7 kg"
+
+def get_carryon(airline_name):
+    """Return correct carry-on allowance for given airline."""
+    al = airline_name.lower()
+    for keyword, allowance in CARRYON_RULES.items():
+        if keyword in al:
+            return allowance
+    return DEFAULT_CARRYON
 
 # ── Logo helper ───────────────────────────────────────────────────────────────
 def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
@@ -37,7 +54,7 @@ def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
     T         = MTOP
     LOGO_H    = 10 * mm
     LOGO_MAX_W= 44 * mm
-    logo_y    = H - T - 3*mm
+    logo_y    = H - T - 5*mm   # just below the thicker brand bar
 
     try:
         ir       = ImageReader(io.BytesIO(logo_bytes))
@@ -166,10 +183,10 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
     output_path = tmp.name
     tmp.close()
 
-    W, H   = A4
+    W, H    = A4
     MARGIN  = 14 * mm
-    MTOP    = 0.5 * 25.4 * mm
-    MBOTTOM = 0.5 * 25.4 * mm
+    MTOP    = 18 * mm    # increased from 12.7mm — more space at top
+    MBOTTOM = 10 * mm
     TGAP    = 16 * mm
 
     BRAND      = colors.HexColor(data.get('brand_hex', '#1A1A1A'))
@@ -202,12 +219,12 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
 
         # Brand bar
         cv.setFillColor(BRAND)
-        cv.rect(0, H - T - 2*mm, W, 2*mm, fill=1, stroke=0)
+        cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
 
-        # Airline name (left)
+        # Airline name (left) — more space below brand bar
         cv.setFillColor(BRAND)
         cv.setFont("Helvetica-Bold", 18)
-        cv.drawString(MARGIN, H - T - 14*mm, data.get('airline_name', '').upper())
+        cv.drawString(MARGIN, H - T - 16*mm, data.get('airline_name', '').upper())
 
         # Logo + "Electronic ticket receipt" label (top right)
         if logo_bytes:
@@ -217,42 +234,42 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cv.setFillColor(colors.HexColor("#4E4E4E"))
             cv.setFont("Helvetica", 8)
             lbl = "Electronic ticket receipt"
-            cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), H-T-11*mm, lbl)
+            cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), H-T-13*mm, lbl)
 
-        hr(H - T - 18*mm, lw=0.6)
+        hr(H - T - 21*mm, lw=0.6)
 
-        # Passenger name
+        # Passenger name — gap after divider
         title = data.get('title', '')
         pax   = ((title + ' ') if title else '') + data.get('passenger_name', '')
         cv.setFillColor(BLACK)
         cv.setFont("Helvetica-Bold", 13)
-        cv.drawString(MARGIN, H - T - 27*mm, pax.strip())
+        cv.drawString(MARGIN, H - T - 31*mm, pax.strip())
 
         ty_off = 4*mm if (total_pages > 1 and page_label) else 0
         if page_label and total_pages > 1:
             cv.setFillColor(BRAND)
             cv.setFont("Helvetica-Bold", 8)
-            cv.drawString(MARGIN, H - T - 32*mm, page_label.upper())
+            cv.drawString(MARGIN, H - T - 36*mm, page_label.upper())
 
         # Right column
         rx = W - MARGIN
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-        cv.drawRightString(rx, H - T - 22*mm, f"{data.get('airline_name','')} reference")
+        cv.drawRightString(rx, H - T - 26*mm, f"{data.get('airline_name','')} reference")
         cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 9)
-        cv.drawRightString(rx, H - T - 27.5*mm, data.get('booking_ref', ''))
+        cv.drawRightString(rx, H - T - 31*mm, data.get('booking_ref', ''))
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-        cv.drawRightString(rx, H - T - 33*mm, "Ticket number")
+        cv.drawRightString(rx, H - T - 37*mm, "Ticket number")
         cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-        cv.drawRightString(rx, H - T - 37.5*mm, data.get('ticket_number', ''))
+        cv.drawRightString(rx, H - T - 42*mm, data.get('ticket_number', ''))
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
-        cv.drawRightString(rx, H - T - 43*mm, f"Date of issue  {data.get('date_of_issue','')}")
+        cv.drawRightString(rx, H - T - 47*mm, f"Date of issue  {data.get('date_of_issue','')}")
 
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 8)
-        cv.drawString(MARGIN, H - T - 36*mm - ty_off, "Thank you for your booking.")
-        cv.drawString(MARGIN, H - T - 41*mm - ty_off, "We look forward to welcoming you soon.")
+        cv.drawString(MARGIN, H - T - 40*mm - ty_off, "Thank you for your booking.")
+        cv.drawString(MARGIN, H - T - 45*mm - ty_off, "We look forward to welcoming you soon.")
 
         # Journey dots
-        dot_y = H - T - 58*mm - ty_off
+        dot_y = H - T - 63*mm - ty_off
         codes = [flights[0]['dep_code']] + [f['arr_code'] for f in flights]
         dates = [flights[0]['dep_date']] + [f['arr_date'] for f in flights]
         fnos  = [f['flight_no'] for f in flights]
@@ -278,10 +295,10 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 fw = cv.stringWidth(fnos[i], "Helvetica", 6.5)
                 cv.drawString(mid - fw/2, dot_y - 5.5*mm, fnos[i])
 
-        hr(H - T - 67*mm - ty_off, lw=0.5)
+        hr(H - T - 73*mm - ty_off, lw=0.5)
 
         # Flight cards
-        cy = H - MTOP - 76*mm - ty_off
+        cy = H - MTOP - 82*mm - ty_off
 
         for flight in flights:
             CH = 44*mm; CW = W - 2*MARGIN
@@ -456,6 +473,12 @@ def generate():
                 if key in al:
                     data['brand_hex'] = hx
                     break
+
+        # Apply carry-on rule to every flight on every page
+        carryon = get_carryon(data.get('airline_name', ''))
+        for page in data.get('pages', []):
+            for flight in page.get('flights', []):
+                flight['carryon'] = carryon
 
         pdf_path = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext)
         pax      = re.sub(r'\s+', '_', data.get('passenger_name','PASSENGER')).upper()
