@@ -29,38 +29,41 @@ AIRLINE_BRANDS = {
     "air arabia":         "#E31837",
 }
 
-# Logos folder — place PNG/JPG files here named after airline
-# e.g. static/logos/thai_airways.png, static/logos/qatar_airways.png
-LOGOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'logos')
+# ── Logo helper ───────────────────────────────────────────────────────────────
+def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
+    """Draw uploaded logo in top-right corner."""
+    from reportlab.lib.utils import ImageReader
+    import io
+    T         = MTOP
+    LOGO_H    = 10 * mm
+    LOGO_MAX_W= 44 * mm
+    logo_y    = H - T - 3*mm
 
-# Maps lowercase keywords in airline name -> logo filename (without extension)
-AIRLINE_LOGO_MAP = {
-    "thai airways":       "thai_airways",
-    "srilankan":          "srilankan_airlines",
-    "qatar":              "qatar_airways",
-    "gulf air":           "gulf_air",
-    "etihad":             "etihad_airways",
-    "emirates":           "emirates",
-    "singapore airlines": "singapore_airlines",
-    "lufthansa":          "lufthansa",
-    "british airways":    "british_airways",
-    "air india":          "air_india",
-    "flynas":             "flynas",
-    "flydubai":           "flydubai",
-    "indigo":             "indigo",
-    "air arabia":         "air_arabia",
-}
-
-def find_logo(airline_name):
-    """Return full path to logo file if it exists, else None."""
-    al = airline_name.lower()
-    for keyword, filename in AIRLINE_LOGO_MAP.items():
-        if keyword in al:
-            for ext in ('png', 'jpg', 'jpeg'):
-                path = os.path.join(LOGOS_DIR, f"{filename}.{ext}")
-                if os.path.exists(path):
-                    return path
-    return None
+    try:
+        ir       = ImageReader(io.BytesIO(logo_bytes))
+        iw, ih   = ir.getSize()
+        scale    = LOGO_H / ih
+        logo_w   = iw * scale
+        if logo_w > LOGO_MAX_W:
+            scale  = LOGO_MAX_W / iw
+            logo_w = LOGO_MAX_W
+        logo_h   = ih * scale
+        logo_x   = W - MARGIN - logo_w
+        cv.drawImage(ImageReader(io.BytesIO(logo_bytes)),
+                     logo_x, logo_y - logo_h,
+                     width=logo_w, height=logo_h,
+                     preserveAspectRatio=True, mask='auto')
+        lbl = "Electronic ticket receipt"
+        lw  = cv.stringWidth(lbl, "Helvetica", 7.5)
+        cv.setFillColor(GREY_MID_COLOR)
+        cv.setFont("Helvetica", 7.5)
+        cv.drawString(W - MARGIN - lw, logo_y - logo_h - 3*mm, lbl)
+    except Exception as e:
+        app.logger.error(f"Logo draw error: {e}")
+        cv.setFillColor(GREY_MID_COLOR)
+        cv.setFont("Helvetica", 8)
+        lbl = "Electronic ticket receipt"
+        cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), H-T-11*mm, lbl)
 
 
 EXTRACT_PROMPT = """You are a flight data extractor. Extract all flight booking details from the text below and return ONLY a raw JSON object. No markdown, no code fences, no explanation — just the JSON.
@@ -158,7 +161,7 @@ def extract_with_groq(pdf_bytes_list):
     return json.loads(raw)
 
 
-def generate_eticket_pdf(data):
+def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
     output_path = tmp.name
     tmp.close()
@@ -207,47 +210,14 @@ def generate_eticket_pdf(data):
         cv.drawString(MARGIN, H - T - 14*mm, data.get('airline_name', '').upper())
 
         # Logo + "Electronic ticket receipt" label (top right)
-        logo_path = find_logo(data.get('airline_name', ''))
-        LOGO_H    = 10 * mm   # ~3-4 text lines tall
-        LOGO_MAX_W = 38 * mm  # max width — keeps proportions
-        logo_y    = H - T - 3*mm   # top of logo (just below brand bar)
-
-        if logo_path:
-            try:
-                from PIL import Image as PILImage
-                img = PILImage.open(logo_path)
-                iw, ih = img.size
-                # Calculate width to maintain aspect ratio at LOGO_H height
-                scale   = LOGO_H / (ih * 0.352778)   # px -> mm via 72dpi factor
-                logo_w  = iw * 0.352778 * scale
-                if logo_w > LOGO_MAX_W:              # cap max width
-                    scale  = LOGO_MAX_W / (iw * 0.352778)
-                    logo_w = LOGO_MAX_W
-                    logo_h_actual = ih * 0.352778 * scale
-                else:
-                    logo_h_actual = LOGO_H
-                logo_x = W - MARGIN - logo_w
-                cv.drawImage(logo_path, logo_x, logo_y - logo_h_actual,
-                             width=logo_w, height=logo_h_actual,
-                             preserveAspectRatio=True, mask='auto')
-                # "Electronic ticket receipt" below logo
-                cv.setFillColor(GREY_MID)
-                cv.setFont("Helvetica", 7.5)
-                lbl = "Electronic ticket receipt"
-                lw  = cv.stringWidth(lbl, "Helvetica", 7.5)
-                cv.drawString(W - MARGIN - lw, logo_y - logo_h_actual - 3*mm, lbl)
-            except Exception:
-                # Fallback if PIL not available or image error
-                cv.setFillColor(GREY_MID)
-                cv.setFont("Helvetica", 8)
-                lbl = "Electronic ticket receipt"
-                cv.drawString(W - MARGIN - cv.stringWidth(lbl, "Helvetica", 8), H - T - 11*mm, lbl)
+        if logo_bytes:
+            draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
+                      colors.HexColor("#4E4E4E"))
         else:
-            # No logo — show label only
-            cv.setFillColor(GREY_MID)
+            cv.setFillColor(colors.HexColor("#4E4E4E"))
             cv.setFont("Helvetica", 8)
             lbl = "Electronic ticket receipt"
-            cv.drawString(W - MARGIN - cv.stringWidth(lbl, "Helvetica", 8), H - T - 11*mm, lbl)
+            cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), H-T-11*mm, lbl)
 
         hr(H - T - 18*mm, lw=0.6)
 
@@ -467,6 +437,14 @@ def generate():
         if val:
             overrides[field] = val
 
+    # Read uploaded logo if provided
+    logo_bytes = None
+    logo_ext   = None
+    logo_file  = request.files.get('logo')
+    if logo_file and logo_file.filename:
+        logo_bytes = logo_file.read()
+        logo_ext   = logo_file.filename.rsplit('.', 1)[-1].lower()
+
     try:
         pdf_bytes_list = [f.read() for f in files]
         data = extract_with_groq(pdf_bytes_list)
@@ -479,7 +457,7 @@ def generate():
                     data['brand_hex'] = hx
                     break
 
-        pdf_path = generate_eticket_pdf(data)
+        pdf_path = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext)
         pax      = re.sub(r'\s+', '_', data.get('passenger_name','PASSENGER')).upper()
         tkt      = re.sub(r'[^0-9]', '', data.get('ticket_number',''))
         filename = f"eticket_{tkt}_{pax}.pdf"
