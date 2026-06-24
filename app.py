@@ -48,39 +48,48 @@ def get_carryon(airline_name):
 
 # ── Logo helper ───────────────────────────────────────────────────────────────
 def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
-    """Draw uploaded logo in top-right corner."""
+    """Draw uploaded logo in top-right corner. Returns y of bottom of logo area."""
     from reportlab.lib.utils import ImageReader
     import io
-    T         = MTOP
-    LOGO_H    = 10 * mm
-    LOGO_MAX_W= 44 * mm
-    logo_y    = H - T - 5*mm   # just below the thicker brand bar
+    T          = MTOP
+    LOGO_H     = 20 * mm
+    LOGO_MAX_W = 88 * mm
+    logo_top   = H - T - 5*mm    # just below brand bar
 
     try:
-        ir       = ImageReader(io.BytesIO(logo_bytes))
-        iw, ih   = ir.getSize()
-        scale    = LOGO_H / ih
-        logo_w   = iw * scale
+        ir     = ImageReader(io.BytesIO(logo_bytes))
+        iw, ih = ir.getSize()
+        scale  = LOGO_H / ih
+        logo_w = iw * scale
         if logo_w > LOGO_MAX_W:
             scale  = LOGO_MAX_W / iw
             logo_w = LOGO_MAX_W
-        logo_h   = ih * scale
-        logo_x   = W - MARGIN - logo_w
+        logo_h = ih * scale
+        logo_x = W - MARGIN - logo_w
+        logo_bottom = logo_top - logo_h
+
         cv.drawImage(ImageReader(io.BytesIO(logo_bytes)),
-                     logo_x, logo_y - logo_h,
+                     logo_x, logo_bottom,
                      width=logo_w, height=logo_h,
                      preserveAspectRatio=True, mask='auto')
+
         lbl = "Electronic ticket receipt"
         lw  = cv.stringWidth(lbl, "Helvetica", 7.5)
+        label_y = logo_bottom - 5*mm
         cv.setFillColor(GREY_MID_COLOR)
         cv.setFont("Helvetica", 7.5)
-        cv.drawString(W - MARGIN - lw, logo_y - logo_h - 3*mm, lbl)
+        cv.drawString(W - MARGIN - lw, label_y, lbl)
+
+        return label_y - 2*mm   # bottom of entire logo+label block
+
     except Exception as e:
         app.logger.error(f"Logo draw error: {e}")
         cv.setFillColor(GREY_MID_COLOR)
         cv.setFont("Helvetica", 8)
         lbl = "Electronic ticket receipt"
-        cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), H-T-11*mm, lbl)
+        label_y = H - T - 13*mm
+        cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), label_y, lbl)
+        return label_y - 2*mm
 
 
 EXTRACT_PROMPT = """You are a flight data extractor. Extract all flight booking details from the text below and return ONLY a raw JSON object. No markdown, no code fences, no explanation — just the JSON.
@@ -91,6 +100,9 @@ Use this exact structure:
   "title": "MR or MRS or MS or DR or empty string",
   "ticket_number": "ticket number as string",
   "booking_ref": "PNR / airline booking reference",
+  "all_refs": [
+    {"label": "Airline Booking Reference or Agency Ref or PNR etc", "value": "XXXXXX"}
+  ],
   "airline_name": "Full airline name",
   "date_of_issue": "DD Mon YYYY",
   "brand_hex": "#hexcolor",
@@ -128,6 +140,8 @@ Use this exact structure:
 }
 
 Rules:
+- Extract ALL reference numbers found in the document into "all_refs" list (airline ref, agency ref, booking number, PNR, etc.)
+- For "booking_ref" pick the airline's own reference (not agency/trip.com/booking.com ref)
 - If there is a layover/transfer between flights, set transit on the FIRST flight:
   {"airport": "Airport short name", "duration": "Xhr Ymins", "baggage_status": "checked_through or reclaim"}
 - For round trips: use TWO pages — "Outbound Journey" and "Return Journey"
@@ -140,6 +154,52 @@ Rules:
 
 ITINERARY TEXT:
 """
+
+# Keywords that indicate an airline's own reference (higher priority)
+AIRLINE_REF_KEYWORDS = [
+    "airline", "carrier", "flight ref", "airline ref", "airline booking",
+    "airline reference", "pnr", "locator", "record locator"
+]
+
+# Keywords that indicate agency/third-party references (lower priority)
+AGENCY_REF_KEYWORDS = [
+    "agency", "trip.com", "booking.com", "agent", "travel agent",
+    "booking no", "booking number", "booking ref", "order", "itinerary"
+]
+
+def pick_airline_ref(data):
+    """
+    If all_refs has 2+ entries, pick the airline reference.
+    Falls back to booking_ref if none clearly identified.
+    """
+    all_refs = data.get('all_refs', [])
+    if len(all_refs) < 2:
+        return data.get('booking_ref', '')
+
+    # Score each ref: +1 for airline keywords, -1 for agency keywords
+    best_ref = None
+    best_score = -99
+
+    for ref in all_refs:
+        label = ref.get('label', '').lower()
+        value = ref.get('value', '').strip()
+        if not value:
+            continue
+        score = 0
+        for kw in AIRLINE_REF_KEYWORDS:
+            if kw in label:
+                score += 2
+        for kw in AGENCY_REF_KEYWORDS:
+            if kw in label:
+                score -= 2
+        # Short alphanumeric codes (5-7 chars) typical of airline PNRs
+        if value.isalnum() and 5 <= len(value) <= 7:
+            score += 1
+        if score > best_score:
+            best_score = score
+            best_ref = value
+
+    return best_ref or data.get('booking_ref', '')
 
 
 def extract_pdf_text(pdf_bytes):
@@ -185,8 +245,8 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
 
     W, H    = A4
     MARGIN  = 14 * mm
-    MTOP    = 18 * mm    # increased from 12.7mm — more space at top
-    MBOTTOM = 10 * mm
+    MTOP    = 20 * mm
+    MBOTTOM = 20 * mm
     TGAP    = 16 * mm
 
     BRAND      = colors.HexColor(data.get('brand_hex', '#1A1A1A'))
@@ -227,49 +287,66 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
         cv.drawString(MARGIN, H - T - 16*mm, data.get('airline_name', '').upper())
 
         # Logo + "Electronic ticket receipt" label (top right)
+        # logo_bottom_y = exact y of bottom of logo+label block
         if logo_bytes:
-            draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
-                      colors.HexColor("#4E4E4E"))
+            logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
+                                      colors.HexColor("#4E4E4E"))
         else:
             cv.setFillColor(colors.HexColor("#4E4E4E"))
             cv.setFont("Helvetica", 8)
             lbl = "Electronic ticket receipt"
-            cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), H-T-13*mm, lbl)
+            lbl_y = H - T - 13*mm
+            cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), lbl_y, lbl)
+            logo_bottom_y = lbl_y - 2*mm
 
-        hr(H - T - 21*mm, lw=0.6)
+        # All content below is anchored to logo_bottom_y
+        # so nothing ever overlaps the logo regardless of its size
+        AFTER_LOGO_GAP = 5*mm   # breathing room below logo
 
-        # Passenger name — gap after divider
+        # Divider
+        divider_y = logo_bottom_y - AFTER_LOGO_GAP
+        hr(divider_y, lw=0.6)
+
+        # Passenger name
         title = data.get('title', '')
         pax   = ((title + ' ') if title else '') + data.get('passenger_name', '')
         cv.setFillColor(BLACK)
         cv.setFont("Helvetica-Bold", 13)
-        cv.drawString(MARGIN, H - T - 31*mm, pax.strip())
+        pax_y = divider_y - 9*mm
+        cv.drawString(MARGIN, pax_y, pax.strip())
 
         ty_off = 4*mm if (total_pages > 1 and page_label) else 0
         if page_label and total_pages > 1:
             cv.setFillColor(BRAND)
             cv.setFont("Helvetica-Bold", 8)
-            cv.drawString(MARGIN, H - T - 36*mm, page_label.upper())
+            cv.drawString(MARGIN, pax_y - 5*mm, page_label.upper())
 
-        # Right column
+        # Right column — stacked below logo_bottom_y
         rx = W - MARGIN
+        ry = logo_bottom_y - AFTER_LOGO_GAP - 4*mm
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-        cv.drawRightString(rx, H - T - 26*mm, f"{data.get('airline_name','')} reference")
+        cv.drawRightString(rx, ry, f"{data.get('airline_name','')} reference")
+        ry -= 5*mm
         cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 9)
-        cv.drawRightString(rx, H - T - 31*mm, data.get('booking_ref', ''))
+        cv.drawRightString(rx, ry, data.get('booking_ref', ''))
+        ry -= 7*mm
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-        cv.drawRightString(rx, H - T - 37*mm, "Ticket number")
+        cv.drawRightString(rx, ry, "Ticket number")
+        ry -= 5*mm
         cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-        cv.drawRightString(rx, H - T - 42*mm, data.get('ticket_number', ''))
+        cv.drawRightString(rx, ry, data.get('ticket_number', ''))
+        ry -= 6*mm
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
-        cv.drawRightString(rx, H - T - 47*mm, f"Date of issue  {data.get('date_of_issue','')}")
+        cv.drawRightString(rx, ry, f"Date of issue  {data.get('date_of_issue','')}")
 
+        # Thank you lines (left)
+        ty_y = pax_y - 9*mm - ty_off
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 8)
-        cv.drawString(MARGIN, H - T - 40*mm - ty_off, "Thank you for your booking.")
-        cv.drawString(MARGIN, H - T - 45*mm - ty_off, "We look forward to welcoming you soon.")
+        cv.drawString(MARGIN, ty_y, "Thank you for your booking.")
+        cv.drawString(MARGIN, ty_y - 5*mm, "We look forward to welcoming you soon.")
 
         # Journey dots
-        dot_y = H - T - 63*mm - ty_off
+        dot_y = ty_y - 18*mm - ty_off
         codes = [flights[0]['dep_code']] + [f['arr_code'] for f in flights]
         dates = [flights[0]['dep_date']] + [f['arr_date'] for f in flights]
         fnos  = [f['flight_no'] for f in flights]
@@ -295,10 +372,12 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 fw = cv.stringWidth(fnos[i], "Helvetica", 6.5)
                 cv.drawString(mid - fw/2, dot_y - 5.5*mm, fnos[i])
 
-        hr(H - T - 73*mm - ty_off, lw=0.5)
+        # Bottom divider below dots
+        bottom_divider_y = dot_y - 12*mm
+        hr(bottom_divider_y, lw=0.5)
 
-        # Flight cards
-        cy = H - MTOP - 82*mm - ty_off
+        # Flight cards start below bottom divider
+        cy = bottom_divider_y - 5*mm
 
         for flight in flights:
             CH = 44*mm; CW = W - 2*MARGIN
@@ -466,6 +545,10 @@ def generate():
         pdf_bytes_list = [f.read() for f in files]
         data = extract_with_groq(pdf_bytes_list)
         data.update(overrides)
+
+        # If 2+ references found, always use the airline reference
+        if 'booking_ref' not in overrides:
+            data['booking_ref'] = pick_airline_ref(data)
 
         if not data.get('brand_hex') or data['brand_hex'] in ('#1A1A1A','#000000',''):
             al = data.get('airline_name', '').lower()
