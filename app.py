@@ -244,23 +244,91 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
     tmp.close()
 
     W, H    = A4
-    MARGIN  = 14 * mm
-    MTOP    = 20 * mm
-    MBOTTOM = 20 * mm
-    TGAP    = 16 * mm
+
+    pages        = data.get('pages', [])
+    total_pages  = len(pages)
+
+    # Detect direct round trip: exactly 2 pages, 1 direct flight each, no transit
+    is_direct_rt = (
+        total_pages == 2 and
+        all(len(p.get('flights',[])) == 1 and
+            not p['flights'][0].get('transit')
+            for p in pages)
+    )
+
+    # Detect single direct flight: 1 page, 1 flight, no transit
+    total_flights = sum(len(p.get('flights',[])) for p in pages)
+    is_single_direct = (
+        total_pages == 1 and
+        total_flights == 1 and
+        not pages[0]['flights'][0].get('transit')
+    )
+
+    # Detect if all flights are the same airline → show small logo in card header
+    all_airlines = [f.get('operated_by','').lower().strip()
+                    for p in pages for f in p.get('flights',[])]
+    all_same_airline = len(set(all_airlines)) == 1 and bool(logo_bytes)
+
+    # Card logo dimensions (small — fits in 8mm card header)
+    CARD_LOGO_H   = 5.5 * mm
+    CARD_LOGO_MAX = 28 * mm
+
+    # Margins and spacing
+    if is_direct_rt:
+        MARGIN       = 12 * mm
+        MTOP         = 14 * mm
+        MBOTTOM      = 12 * mm
+        EXTRA_GAP    = 0 * mm
+    elif is_single_direct:
+        MARGIN       = 14 * mm
+        MTOP         = 30 * mm
+        MBOTTOM      = 30 * mm
+        EXTRA_GAP    = 18 * mm
+    else:
+        MARGIN       = 14 * mm
+        MTOP         = 20 * mm
+        MBOTTOM      = 20 * mm
+        EXTRA_GAP    = 0 * mm
+
+    TGAP = 16 * mm
+
+    # ── Chunk pages so max 2 flight cards per PDF page ────────────────────
+    # Each entry: { 'flights': [...], 'page_label': str, 'is_first': bool,
+    #               'all_flights_in_journey': [...], 'is_last_chunk': bool }
+    CARDS_PER_PAGE = 2
+    render_chunks = []
+    for page in pages:
+        flights    = page.get('flights', [])
+        page_label = page.get('page_label', '')
+        for chunk_i, start in enumerate(range(0, len(flights), CARDS_PER_PAGE)):
+            chunk = flights[start:start + CARDS_PER_PAGE]
+            render_chunks.append({
+                'flights':                chunk,
+                'page_label':             page_label if chunk_i == 0 else '',
+                'is_first':               chunk_i == 0,
+                'all_flights_in_journey': flights,    # full list for dot map
+                'is_last_chunk':          (start + CARDS_PER_PAGE) >= len(flights),
+            })
+
+    total_chunks = len(render_chunks)
+
+    # Recalculate total_flights after chunking for is_single_direct check
+    # (already computed above, no change needed)
 
     BRAND      = colors.HexColor(data.get('brand_hex', '#1A1A1A'))
     BLACK      = colors.HexColor("#1A1A1A")
     GREY_DARK  = colors.HexColor("#222222")
     GREY_MID   = colors.HexColor("#4E4E4E")
-    GREY_LIGHT = colors.HexColor("#C1C1C1")
+    GREY_LIGHT = colors.HexColor("#DEDEDE")
     GREY_LINE  = colors.HexColor("#9B9B9B")
 
-    pages       = data.get('pages', [])
-    total_pages = len(pages)
     cv          = canvas.Canvas(output_path, pagesize=A4)
     cv.setTitle(f"E-Ticket - {data.get('passenger_name','')}")
     cv.setAuthor('Prime Lanka Tours')
+
+    # For single-page direct round trip, render as 1 PDF page
+    render_pages  = 1 if is_direct_rt else total_pages
+    display_pages = render_pages
 
     def hr(y, x1=None, x2=None, color=None, lw=0.4):
         cv.saveState()
@@ -269,152 +337,226 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
         cv.line(x1 or MARGIN, y, x2 or W - MARGIN, y)
         cv.restoreState()
 
-    for pi, page in enumerate(pages):
-        if pi > 0:
-            cv.showPage()
-
-        flights    = page.get('flights', [])
-        page_label = page.get('page_label', '')
+    for ci, chunk in enumerate(render_chunks):
+        flights    = chunk['flights']
+        page_label = chunk['page_label']
+        is_first   = chunk['is_first']
+        is_last_c  = chunk['is_last_chunk']
+        all_j_fl   = chunk['all_flights_in_journey']
         T          = MTOP
 
-        # Brand bar
-        cv.setFillColor(BRAND)
-        cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
+        # ── Page break ─────────────────────────────────────────────────────
+        if is_direct_rt and ci > 0:
+            pass   # direct RT: both sections on one page
+        elif ci > 0:
+            cv.showPage()
 
-        # Airline name (left) — more space below brand bar
-        cv.setFillColor(BRAND)
-        cv.setFont("Helvetica-Bold", 18)
-        cv.drawString(MARGIN, H - T - 16*mm, data.get('airline_name', '').upper())
+        # ── Header (drawn on first chunk of each journey, or every chunk for continuation) ──
+        draw_header = (not is_direct_rt and is_first) or (is_direct_rt and ci == 0) or (not is_direct_rt and not is_first)
 
-        # Logo + "Electronic ticket receipt" label (top right)
-        # logo_bottom_y = exact y of bottom of logo+label block
-        if logo_bytes:
-            logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
-                                      colors.HexColor("#4E4E4E"))
-        else:
-            cv.setFillColor(colors.HexColor("#4E4E4E"))
-            cv.setFont("Helvetica", 8)
-            lbl = "Electronic ticket receipt"
-            lbl_y = H - T - 13*mm
-            cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), lbl_y, lbl)
-            logo_bottom_y = lbl_y - 2*mm
-
-        # All content below is anchored to logo_bottom_y
-        # so nothing ever overlaps the logo regardless of its size
-        AFTER_LOGO_GAP = 5*mm   # breathing room below logo
-
-        # Divider
-        divider_y = logo_bottom_y - AFTER_LOGO_GAP
-        hr(divider_y, lw=0.6)
-
-        # Passenger name
-        title = data.get('title', '')
-        pax   = ((title + ' ') if title else '') + data.get('passenger_name', '')
-        cv.setFillColor(BLACK)
-        cv.setFont("Helvetica-Bold", 13)
-        pax_y = divider_y - 9*mm
-        cv.drawString(MARGIN, pax_y, pax.strip())
-
-        ty_off = 4*mm if (total_pages > 1 and page_label) else 0
-        if page_label and total_pages > 1:
+        if not is_direct_rt or ci == 0:
+            # Brand bar
             cv.setFillColor(BRAND)
-            cv.setFont("Helvetica-Bold", 8)
-            cv.drawString(MARGIN, pax_y - 5*mm, page_label.upper())
+            cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
 
-        # Right column — stacked below logo_bottom_y
-        rx = W - MARGIN
-        ry = logo_bottom_y - AFTER_LOGO_GAP - 4*mm
-        cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-        cv.drawRightString(rx, ry, f"{data.get('airline_name','')} reference")
-        ry -= 5*mm
-        cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 9)
-        cv.drawRightString(rx, ry, data.get('booking_ref', ''))
-        ry -= 7*mm
-        cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-        cv.drawRightString(rx, ry, "Ticket number")
-        ry -= 5*mm
-        cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-        cv.drawRightString(rx, ry, data.get('ticket_number', ''))
-        ry -= 6*mm
-        cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
-        cv.drawRightString(rx, ry, f"Date of issue  {data.get('date_of_issue','')}")
+            # Airline name
+            cv.setFillColor(BRAND)
+            cv.setFont("Helvetica-Bold", 18)
+            cv.drawString(MARGIN, H - T - 16*mm, data.get('airline_name', '').upper())
 
-        # Thank you lines (left)
-        ty_y = pax_y - 9*mm - ty_off
-        cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 8)
-        cv.drawString(MARGIN, ty_y, "Thank you for your booking.")
-        cv.drawString(MARGIN, ty_y - 5*mm, "We look forward to welcoming you soon.")
+            # Logo
+            if logo_bytes:
+                logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
+                                          colors.HexColor("#4E4E4E"))
+            else:
+                cv.setFillColor(colors.HexColor("#4E4E4E"))
+                cv.setFont("Helvetica", 8)
+                lbl = "Electronic ticket receipt"
+                lbl_y = H - T - 13*mm
+                cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), lbl_y, lbl)
+                logo_bottom_y = lbl_y - 2*mm
 
-        # Journey dots
-        dot_y = ty_y - 18*mm - ty_off
-        codes = [flights[0]['dep_code']] + [f['arr_code'] for f in flights]
-        dates = [flights[0]['dep_date']] + [f['arr_date'] for f in flights]
-        fnos  = [f['flight_no'] for f in flights]
-        xs = 18*mm; xe = W / 2
-        gap = (xe - xs) / (len(codes) - 1) if len(codes) > 1 else 0
+            AFTER_LOGO_GAP = 5*mm
+            divider_y = logo_bottom_y - AFTER_LOGO_GAP
+            hr(divider_y, lw=0.6)
 
-        for i, (code, date) in enumerate(zip(codes, dates)):
-            cx = xs + i * gap
-            cv.setFillColor(BRAND); cv.circle(cx, dot_y, 3, fill=1, stroke=0)
-            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
-            dw = cv.stringWidth(date, "Helvetica", 6.5)
-            cv.drawString(cx - dw/2, dot_y + 5*mm, date)
+            # Passenger name
+            title = data.get('title', '')
+            pax   = ((title + ' ') if title else '') + data.get('passenger_name', '')
+            cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 13)
+            pax_y = divider_y - 9*mm
+            cv.drawString(MARGIN, pax_y, pax.strip())
+
+            # Right column
+            rx = W - MARGIN
+            ry = logo_bottom_y - AFTER_LOGO_GAP - 4*mm
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
+            cv.drawRightString(rx, ry, f"{data.get('airline_name','')} reference")
+            ry -= 5*mm
+            cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 9)
+            cv.drawRightString(rx, ry, data.get('booking_ref', ''))
+            ry -= 7*mm
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
+            cv.drawRightString(rx, ry, "Ticket number")
+            ry -= 5*mm
             cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-            cw = cv.stringWidth(code, "Helvetica-Bold", 8)
-            cv.drawString(cx - cw/2, dot_y - 6*mm, code)
-            if i < len(fnos):
-                nx = xs + (i+1)*gap; mid = (cx+nx)/2
-                cv.saveState()
-                cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.8); cv.setDash([2,2],0)
-                cv.line(cx+3, dot_y, nx-3, dot_y)
-                cv.restoreState()
+            cv.drawRightString(rx, ry, data.get('ticket_number', ''))
+            ry -= 6*mm
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
+            cv.drawRightString(rx, ry, f"Date of issue  {data.get('date_of_issue','')}")
+
+            # Thank you lines
+            ty_y = pax_y - 9*mm
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 8)
+            cv.drawString(MARGIN, ty_y, "Thank you for your booking.")
+            cv.drawString(MARGIN, ty_y - 5*mm, "We look forward to welcoming you soon.")
+
+            # Journey dots — show all flights in this journey
+            all_f_map = [f for p in pages for f in p.get('flights',[])] if is_direct_rt else all_j_fl
+            dot_y = ty_y - 18*mm
+            dcodes = [all_f_map[0]['dep_code']] + [f['arr_code'] for f in all_f_map]
+            ddates = [all_f_map[0]['dep_date']] + [f['arr_date'] for f in all_f_map]
+            dfnos  = [f['flight_no'] for f in all_f_map]
+            xs = 18*mm; xe = W / 2
+            gap = (xe - xs) / (len(dcodes) - 1) if len(dcodes) > 1 else 0
+            for i, (code, date) in enumerate(zip(dcodes, ddates)):
+                cx = xs + i * gap
+                cv.setFillColor(BRAND); cv.circle(cx, dot_y, 3, fill=1, stroke=0)
                 cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
-                fw = cv.stringWidth(fnos[i], "Helvetica", 6.5)
-                cv.drawString(mid - fw/2, dot_y - 5.5*mm, fnos[i])
+                dw = cv.stringWidth(date, "Helvetica", 6.5)
+                cv.drawString(cx - dw/2, dot_y + 5*mm, date)
+                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+                cw = cv.stringWidth(code, "Helvetica-Bold", 8)
+                cv.drawString(cx - cw/2, dot_y - 6*mm, code)
+                if i < len(dfnos):
+                    nx = xs + (i+1)*gap; mid = (cx+nx)/2
+                    cv.saveState()
+                    cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.8); cv.setDash([2,2],0)
+                    cv.line(cx+3, dot_y, nx-3, dot_y)
+                    cv.restoreState()
+                    cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
+                    fw = cv.stringWidth(dfnos[i], "Helvetica", 6.5)
+                    cv.drawString(mid - fw/2, dot_y - 5.5*mm, dfnos[i])
 
-        # Bottom divider below dots
-        bottom_divider_y = dot_y - 12*mm
-        hr(bottom_divider_y, lw=0.5)
+            bottom_divider_y = dot_y - 12*mm
+            hr(bottom_divider_y, lw=0.5)
+            cy = bottom_divider_y - 5*mm - EXTRA_GAP
 
-        # Flight cards start below bottom divider
-        cy = bottom_divider_y - 5*mm
+        else:
+            # Continuation chunk (not first, not direct_rt):
+            # compact header with just airline name + dots for remaining flights
+            cv.setFillColor(BRAND)
+            cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
+            cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 14)
+            cv.drawString(MARGIN, H - T - 14*mm, data.get('airline_name', '').upper())
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
+            cv.drawRightString(W-MARGIN, H-T-11*mm, "Continued")
 
+            # Mini dot map for remaining flights in this chunk
+            rem_codes = [flights[0]['dep_code']] + [f['arr_code'] for f in flights]
+            rem_dates = [flights[0]['dep_date']] + [f['arr_date'] for f in flights]
+            rem_fnos  = [f['flight_no'] for f in flights]
+            dot_y2 = H - T - 30*mm
+            xs2 = 18*mm; xe2 = W / 2
+            gap2 = (xe2 - xs2) / (len(rem_codes) - 1) if len(rem_codes) > 1 else 0
+            for i, (code, date) in enumerate(zip(rem_codes, rem_dates)):
+                cx = xs2 + i * gap2
+                cv.setFillColor(BRAND); cv.circle(cx, dot_y2, 3, fill=1, stroke=0)
+                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
+                dw = cv.stringWidth(date, "Helvetica", 6.5)
+                cv.drawString(cx - dw/2, dot_y2 + 5*mm, date)
+                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+                cw = cv.stringWidth(code, "Helvetica-Bold", 8)
+                cv.drawString(cx - cw/2, dot_y2 - 6*mm, code)
+                if i < len(rem_fnos):
+                    nx = xs2 + (i+1)*gap2; mid = (cx+nx)/2
+                    cv.saveState()
+                    cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.8); cv.setDash([2,2],0)
+                    cv.line(cx+3, dot_y2, nx-3, dot_y2)
+                    cv.restoreState()
+                    cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
+                    fw = cv.stringWidth(rem_fnos[i], "Helvetica", 6.5)
+                    cv.drawString(mid - fw/2, dot_y2 - 5.5*mm, rem_fnos[i])
+
+            hr(dot_y2 - 12*mm, lw=0.5)
+            cy = dot_y2 - 18*mm
+
+        # ── Section label bar for direct RT ────────────────────────────────
+        if is_direct_rt and page_label:
+            lbh = 7*mm
+            cv.setFillColor(colors.HexColor("#F0F0F0"))
+            cv.rect(MARGIN, cy - lbh, W - 2*MARGIN, lbh, fill=1, stroke=0)
+            cv.setFillColor(BRAND)
+            cv.rect(MARGIN, cy - lbh, 3, lbh, fill=1, stroke=0)
+            cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+            cv.drawString(MARGIN + 6*mm, cy - 4.5*mm, page_label.upper())
+            cy -= lbh + 3*mm
+
+        # ── Flight cards ───────────────────────────────────────────────────
         for flight in flights:
             CH = 44*mm; CW = W - 2*MARGIN
-
             cv.saveState()
             cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.6)
             cv.roundRect(MARGIN, cy-CH, CW, CH, 3, fill=0, stroke=1)
             cv.restoreState()
-
             cv.setFillColor(GREY_LIGHT)
             cv.rect(MARGIN, cy-8*mm, CW, 8*mm, fill=1, stroke=0)
 
+            # Flight number (left side of card header)
             cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 9)
             cv.drawString(MARGIN+4*mm, cy-5.5*mm, flight.get('flight_no',''))
             fnw = cv.stringWidth(flight.get('flight_no',''), "Helvetica-Bold", 9)
-            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 9)
-            cv.drawString(MARGIN+4*mm+fnw+2*mm, cy-5.5*mm, "\u00b7")
-            cv.setFillColor(BLACK); cv.setFont("Helvetica", 8.5)
-            cv.drawString(MARGIN+4*mm+fnw+5*mm, cy-5.5*mm, flight.get('operated_by',''))
-            cv.setFont("Helvetica-Bold", 8)
-            cv.drawRightString(W-MARGIN-2*mm, cy-5.5*mm, flight.get('cabin','Economy'))
+
+            if all_same_airline:
+                # Dot + airline name text (left side, after flight no)
+                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 9)
+                cv.drawString(MARGIN+4*mm+fnw+2*mm, cy-5.5*mm, "\u00b7")
+                cv.setFillColor(BLACK); cv.setFont("Helvetica", 8.5)
+                cv.drawString(MARGIN+4*mm+fnw+5*mm, cy-5.5*mm, flight.get('operated_by',''))
+                # Small logo on right side of card header
+                try:
+                    from reportlab.lib.utils import ImageReader
+                    import io as _io
+                    ir   = ImageReader(_io.BytesIO(logo_bytes))
+                    iw, ih = ir.getSize()
+                    scale  = CARD_LOGO_H / ih
+                    cl_w   = iw * scale
+                    if cl_w > CARD_LOGO_MAX:
+                        scale = CARD_LOGO_MAX / iw
+                        cl_w  = CARD_LOGO_MAX
+                    cl_h  = ih * scale
+                    cl_x  = W - MARGIN - 2*mm - cl_w
+                    cl_y  = cy - 8*mm + (8*mm - cl_h) / 2
+                    cv.drawImage(ImageReader(_io.BytesIO(logo_bytes)),
+                                 cl_x, cl_y, width=cl_w, height=cl_h,
+                                 preserveAspectRatio=True, mask='auto')
+                    # Cabin sits just left of logo
+                    cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+                    cv.drawRightString(cl_x - 3*mm, cy-5.5*mm, flight.get('cabin','Economy'))
+                except Exception:
+                    cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+                    cv.drawRightString(W-MARGIN-2*mm, cy-5.5*mm, flight.get('cabin','Economy'))
+            else:
+                # Different airlines — text name + cabin right-aligned
+                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 9)
+                cv.drawString(MARGIN+4*mm+fnw+2*mm, cy-5.5*mm, "\u00b7")
+                cv.setFillColor(BLACK); cv.setFont("Helvetica", 8.5)
+                cv.drawString(MARGIN+4*mm+fnw+5*mm, cy-5.5*mm, flight.get('operated_by',''))
+                cv.setFont("Helvetica-Bold", 8)
+                cv.drawRightString(W-MARGIN-2*mm, cy-5.5*mm, flight.get('cabin','Economy'))
+
             hr(cy-8*mm, x1=MARGIN, x2=MARGIN+CW)
-
             bt = cy-10*mm; lx = MARGIN+4*mm; infox = W*0.62
-
             cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
             cv.drawString(lx, bt-2*mm, flight.get('dep_city',''))
             acw = cv.stringWidth(flight.get('arr_city',''), "Helvetica", 7.5)
             cv.drawString(infox-2*mm-acw-10*mm, bt-2*mm, flight.get('arr_city',''))
-
             cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 26)
             cv.drawString(lx, bt-12*mm, flight.get('dep_code',''))
             dcw26 = cv.stringWidth(flight.get('dep_code',''), "Helvetica-Bold", 26)
             acw26 = cv.stringWidth(flight.get('arr_code',''), "Helvetica-Bold", 26)
             arr_col = infox-2*mm-acw26-10*mm
             cv.drawString(arr_col, bt-12*mm, flight.get('arr_code',''))
-
             cv.setFillColor(GREY_DARK); cv.setFont("Helvetica-Bold", 9)
             cv.drawString(lx, bt-16*mm, flight.get('dep_time',''))
             cv.drawString(arr_col, bt-16*mm, flight.get('arr_time',''))
@@ -424,11 +566,8 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cv.setFont("Helvetica", 7)
             cv.drawString(lx, bt-24*mm, flight.get('dep_airport',''))
             cv.drawString(arr_col, bt-24*mm, flight.get('arr_airport',''))
-            if flight.get('dep_terminal'):
-                cv.drawString(lx, bt-27.5*mm, flight['dep_terminal'])
-            if flight.get('arr_terminal'):
-                cv.drawString(arr_col, bt-27.5*mm, flight['arr_terminal'])
-
+            if flight.get('dep_terminal'): cv.drawString(lx, bt-27.5*mm, flight['dep_terminal'])
+            if flight.get('arr_terminal'): cv.drawString(arr_col, bt-27.5*mm, flight['arr_terminal'])
             dep_end = lx+dcw26+3*mm; arr_start = arr_col-3*mm; arrow_y = bt-9*mm
             cv.saveState()
             cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.7); cv.setDash([2,2],0)
@@ -436,76 +575,67 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cv.restoreState()
             cv.setFillColor(GREY_MID)
             p = cv.beginPath()
-            p.moveTo(arr_start, arrow_y)
-            p.lineTo(arr_start-4, arrow_y+2)
-            p.lineTo(arr_start-4, arrow_y-2)
-            p.close()
+            p.moveTo(arr_start, arrow_y); p.lineTo(arr_start-4, arrow_y+2); p.lineTo(arr_start-4, arrow_y-2); p.close()
             cv.drawPath(p, fill=1, stroke=0)
-
-            rows = [("Fare type", flight.get('fare_type','-')),
-                    ("Seat",      flight.get('seat','-')),
-                    ("Carry-on",  flight.get('carryon','-')),
-                    ("Checked",   flight.get('checked','-'))]
-            ry = bt-2*mm
-            for lbl, val in rows:
-                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
-                cv.drawString(infox, ry, lbl)
-                cv.setFillColor(BLACK); cv.setFont("Helvetica", 7.5)
-                cv.drawString(infox+18*mm, ry, val)
-                ry -= 5*mm
-            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
-            cv.drawString(infox, ry, "Status")
-            cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 7.5)
-            cv.drawString(infox+18*mm, ry, flight.get('status','CONFIRMED'))
-
+            rows = [("Fare type", flight.get('fare_type','-')), ("Seat", flight.get('seat','-')),
+                    ("Carry-on",  flight.get('carryon','-')),   ("Checked", flight.get('checked','-'))]
+            ry2 = bt-2*mm
+            for lbl2, val2 in rows:
+                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7); cv.drawString(infox, ry2, lbl2)
+                cv.setFillColor(BLACK); cv.setFont("Helvetica", 7.5); cv.drawString(infox+18*mm, ry2, val2)
+                ry2 -= 5*mm
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7); cv.drawString(infox, ry2, "Status")
+            cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 7.5); cv.drawString(infox+18*mm, ry2, flight.get('status','CONFIRMED'))
             cy -= CH + 3*mm
-
             if flight.get('transit'):
                 tr = flight['transit']
-                checked = tr.get('baggage_status') == 'checked_through'
-                bcol = colors.HexColor("#1E8449" if checked else "#CA6F1E")
-                sh = 9*mm; sw = W-2*MARGIN; sy = cy-TGAP/2-sh/2
+                checked2 = tr.get('baggage_status') == 'checked_through'
+                bcol = colors.HexColor("#1E8449" if checked2 else "#CA6F1E")
+                sh = 9*mm; sw = W-2*MARGIN; ssy = cy-TGAP/2-sh/2
                 cv.setFillColor(colors.HexColor("#F7F7F7"))
-                cv.roundRect(MARGIN, sy, sw, sh, 2, fill=1, stroke=0)
-                cv.setFillColor(BRAND); cv.rect(MARGIN, sy, 2, sh, fill=1, stroke=0)
-                tyl = sy+sh-3.2*mm; tyv = sy+1.8*mm
+                cv.roundRect(MARGIN, ssy, sw, sh, 2, fill=1, stroke=0)
+                cv.setFillColor(BRAND); cv.rect(MARGIN, ssy, 2, sh, fill=1, stroke=0)
+                tyl = ssy+sh-3.2*mm; tyv = ssy+1.8*mm
                 c1 = MARGIN+5*mm; c2 = MARGIN+sw*0.38; c3 = MARGIN+sw*0.68
                 cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6)
-                cv.drawString(c1, tyl, "LAYOVER")
-                cv.drawString(c2, tyl, "TRANSIT AT")
-                cv.drawString(c3, tyl, "BAGGAGE")
-                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8.5)
-                cv.drawString(c1, tyv, tr.get('duration',''))
-                cv.setFont("Helvetica", 7.5)
-                cv.drawString(c2, tyv, tr.get('airport',''))
+                cv.drawString(c1, tyl, "LAYOVER"); cv.drawString(c2, tyl, "TRANSIT AT"); cv.drawString(c3, tyl, "BAGGAGE")
+                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8.5); cv.drawString(c1, tyv, tr.get('duration',''))
+                cv.setFont("Helvetica", 7.5); cv.drawString(c2, tyv, tr.get('airport',''))
                 cv.setFillColor(bcol); cv.setFont("Helvetica-Bold", 7.5)
-                cv.drawString(c3, tyv, "Checked through" if checked else "Reclaim & re-check")
+                cv.drawString(c3, tyv, "Checked through" if checked2 else "Reclaim & re-check")
                 cy -= TGAP
 
-        # Baggage note
-        bag_y = cy-3*mm
-        brows = [(f"{f.get('dep_city','')} -> {f.get('arr_city','')} ({f.get('flight_no','')})",
-                  f"Carry-on: {f.get('carryon','-')}  |  Checked: {f.get('checked','-')}")
-                 for f in flights]
-        box_h = 7*mm + len(brows)*9.5*mm + 4*mm
-        cv.setFillColor(colors.HexColor("#FDFBF3"))
-        cv.setStrokeColor(colors.HexColor("#E8D98A")); cv.setLineWidth(0.5)
-        cv.roundRect(MARGIN, bag_y-box_h, W-2*MARGIN, box_h, 3, fill=1, stroke=1)
-        cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 8)
-        cv.drawString(MARGIN+4*mm, bag_y-5*mm, "BAGGAGE ALLOWANCE")
-        sy = bag_y-7*mm-2*mm
-        for seg_t, seg_d in brows:
-            cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 7)
-            cv.drawString(MARGIN+4*mm, sy, seg_t); sy -= 4*mm
-            cv.setFillColor(GREY_DARK); cv.setFont("Helvetica", 6.5)
-            cv.drawString(MARGIN+4*mm, sy, seg_d); sy -= 5.5*mm
+        # ── Baggage + footer only on last chunk of last journey ─────────────
+        is_last_overall = (ci == total_chunks - 1)
+        if (not is_direct_rt and is_last_c and is_last_overall) or (is_direct_rt and ci == total_chunks - 1):
+            bag_y = cy - 3*mm
+            all_f_bag = [f for p in pages for f in p.get('flights',[])]
+            brows = [(f"{f.get('dep_city','')} -> {f.get('arr_city','')} ({f.get('flight_no','')})",
+                      f"Carry-on: {f.get('carryon','-')}  |  Checked: {f.get('checked','-')}")
+                     for f in all_f_bag]
+            box_h = 7*mm + len(brows)*9.5*mm + 4*mm
+            cv.setFillColor(colors.HexColor("#FDFBF3"))
+            cv.setStrokeColor(colors.HexColor("#E8D98A")); cv.setLineWidth(0.5)
+            cv.roundRect(MARGIN, bag_y-box_h, W-2*MARGIN, box_h, 3, fill=1, stroke=1)
+            cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 8)
+            cv.drawString(MARGIN+4*mm, bag_y-5*mm, "BAGGAGE ALLOWANCE")
+            sy = bag_y-7*mm-2*mm
+            for seg_t, seg_d in brows:
+                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 7)
+                cv.drawString(MARGIN+4*mm, sy, seg_t); sy -= 4*mm
+                cv.setFillColor(GREY_DARK); cv.setFont("Helvetica", 6.5)
+                cv.drawString(MARGIN+4*mm, sy, seg_d); sy -= 5.5*mm
 
-        # Footer
+        # Footer on every chunk
         hr(MBOTTOM+5*mm)
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
         cv.drawString(MARGIN, MBOTTOM+1.5*mm, "All times are local to each city")
-        pg = f"Page {pi+1} of {total_pages}"
+        if is_direct_rt:
+            pg = "Page 1 of 1"
+        else:
+            pg = f"Page {ci+1} of {total_chunks}"
         cv.drawString(W-MARGIN-cv.stringWidth(pg,"Helvetica",7), MBOTTOM+1.5*mm, pg)
+
 
     cv.showPage()
     cv.save()
