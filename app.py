@@ -52,8 +52,8 @@ def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
     from reportlab.lib.utils import ImageReader
     import io
     T          = MTOP
-    LOGO_H     = 20 * mm
-    LOGO_MAX_W = 88 * mm
+    LOGO_H     = 30 * mm
+    LOGO_MAX_W = 132 * mm
     logo_top   = H - T - 5*mm    # just below brand bar
 
     try:
@@ -73,23 +73,11 @@ def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
                      width=logo_w, height=logo_h,
                      preserveAspectRatio=True, mask='auto')
 
-        lbl = "Electronic ticket receipt"
-        lw  = cv.stringWidth(lbl, "Helvetica", 7.5)
-        label_y = logo_bottom - 5*mm
-        cv.setFillColor(GREY_MID_COLOR)
-        cv.setFont("Helvetica", 7.5)
-        cv.drawString(W - MARGIN - lw, label_y, lbl)
-
-        return label_y - 2*mm   # bottom of entire logo+label block
+        return logo_bottom - 3*mm   # bottom of logo block
 
     except Exception as e:
         app.logger.error(f"Logo draw error: {e}")
-        cv.setFillColor(GREY_MID_COLOR)
-        cv.setFont("Helvetica", 8)
-        lbl = "Electronic ticket receipt"
-        label_y = H - T - 13*mm
-        cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), label_y, lbl)
-        return label_y - 2*mm
+        return H - T - 18*mm
 
 
 EXTRACT_PROMPT = """You are a flight data extractor. Extract all flight booking details from the text below and return ONLY a raw JSON object. No markdown, no code fences, no explanation — just the JSON.
@@ -132,7 +120,8 @@ Use this exact structure:
           "status": "CONFIRMED",
           "fare_type": "-",
           "seat": "-",
-          "transit": null
+          "transit": null,
+          "stopover": null
         }
       ]
     }
@@ -142,8 +131,11 @@ Use this exact structure:
 Rules:
 - Extract ALL reference numbers found in the document into "all_refs" list (airline ref, agency ref, booking number, PNR, etc.)
 - For "booking_ref" pick the airline's own reference (not agency/trip.com/booking.com ref)
-- If there is a layover/transfer between flights, set transit on the FIRST flight:
+- If there is a layover/transfer BETWEEN two flights, set transit on the FIRST flight:
   {"airport": "Airport short name", "duration": "Xhr Ymins", "baggage_status": "checked_through or reclaim"}
+- If there is a technical stop/intermediate stop WITHIN a flight (same flight number, brief stop), set stopover:
+  {"code": "IATA code e.g. MLE", "city": "City name", "airport": "Airport short name", "duration": "Xhr"}
+- A flight can have BOTH a stopover (within the flight) AND a transit (after landing, before next flight)
 - For round trips: use TWO pages — "Outbound Journey" and "Return Journey"
 - For one-way: use ONE page with page_label as empty string
 - brand_hex: Thai Airways=#7B0D1E, SriLankan Airlines=#A6192E, Qatar Airways=#5C0632,
@@ -359,22 +351,41 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cv.setFillColor(BRAND)
             cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
 
-            # Airline name
+            # Airline name (left)
             cv.setFillColor(BRAND)
             cv.setFont("Helvetica-Bold", 18)
-            cv.drawString(MARGIN, H - T - 16*mm, data.get('airline_name', '').upper())
+            airline_name_str = data.get('airline_name', '').upper()
+            cv.drawString(MARGIN, H - T - 16*mm, airline_name_str)
 
-            # Logo
+            # "Electronic ticket receipt" right after airline name on same line
+            # Logo (top right) — draw first to get actual logo left edge
             if logo_bytes:
                 logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
                                           colors.HexColor("#4E4E4E"))
+                # Calculate actual left edge of logo for collision guard
+                try:
+                    from reportlab.lib.utils import ImageReader as _IR
+                    import io as _lio
+                    _ir = _IR(_lio.BytesIO(logo_bytes))
+                    _iw, _ih = _ir.getSize()
+                    _lh = 30*mm
+                    _lw = _iw * (_lh / _ih)
+                    if _lw > 132*mm: _lw = 132*mm
+                    logo_left_x = W - MARGIN - _lw - 3*mm
+                except Exception:
+                    logo_left_x = W * 0.55
             else:
-                cv.setFillColor(colors.HexColor("#4E4E4E"))
-                cv.setFont("Helvetica", 8)
-                lbl = "Electronic ticket receipt"
-                lbl_y = H - T - 13*mm
-                cv.drawString(W - MARGIN - cv.stringWidth(lbl,"Helvetica",8), lbl_y, lbl)
-                logo_bottom_y = lbl_y - 2*mm
+                logo_bottom_y = H - T - 18*mm
+                logo_left_x   = W
+
+            # "Electronic ticket receipt" right after airline name — only if it fits
+            anw = cv.stringWidth(airline_name_str, "Helvetica-Bold", 18)
+            cv.setFillColor(colors.HexColor("#4E4E4E"))
+            cv.setFont("Helvetica", 8)
+            etr_x = MARGIN + anw + 4*mm
+            etr_w = cv.stringWidth("Electronic ticket receipt", "Helvetica", 8)
+            if etr_x + etr_w < logo_left_x:
+                cv.drawString(etr_x, H - T - 13*mm, "Electronic ticket receipt")
 
             AFTER_LOGO_GAP = 5*mm
             divider_y = logo_bottom_y - AFTER_LOGO_GAP
@@ -577,6 +588,32 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             p = cv.beginPath()
             p.moveTo(arr_start, arrow_y); p.lineTo(arr_start-4, arrow_y+2); p.lineTo(arr_start-4, arrow_y-2); p.close()
             cv.drawPath(p, fill=1, stroke=0)
+
+            # ── Technical stopover dot on arrow ────────────────────────────
+            if flight.get('stopover'):
+                sv = flight['stopover']
+                mid_x = (dep_end + arr_start) / 2
+                # Blue dot on the arrow line
+                cv.setFillColor(colors.HexColor("#2471A3"))
+                cv.circle(mid_x, arrow_y, 2.5, fill=1, stroke=0)
+                # Duration above dot
+                sv_dur = sv.get('duration','')
+                if sv_dur:
+                    cv.setFillColor(colors.HexColor("#2471A3"))
+                    cv.setFont("Helvetica", 5.5)
+                    dw2 = cv.stringWidth(sv_dur, "Helvetica", 5.5)
+                    cv.drawString(mid_x - dw2/2, arrow_y + 2*mm, sv_dur)
+                # IATA code below dot
+                sv_code = sv.get('code') or sv.get('city','')[:3].upper()
+                cv.setFillColor(colors.HexColor("#2471A3"))
+                cv.setFont("Helvetica-Bold", 6)
+                sw2 = cv.stringWidth(sv_code, "Helvetica-Bold", 6)
+                cv.drawString(mid_x - sw2/2, arrow_y - 3.5*mm, sv_code)
+                # "Technical Stop" label below IATA code
+                ts_lbl = "Technical Stop"
+                cv.setFont("Helvetica", 5)
+                tw = cv.stringWidth(ts_lbl, "Helvetica", 5)
+                cv.drawString(mid_x - tw/2, arrow_y - 6.5*mm, ts_lbl)
             rows = [("Fare type", flight.get('fare_type','-')), ("Seat", flight.get('seat','-')),
                     ("Carry-on",  flight.get('carryon','-')),   ("Checked", flight.get('checked','-'))]
             ry2 = bt-2*mm
@@ -586,6 +623,70 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 ry2 -= 5*mm
             cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7); cv.drawString(infox, ry2, "Status")
             cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 7.5); cv.drawString(infox+18*mm, ry2, flight.get('status','CONFIRMED'))
+
+            # ── Right side: logo + airline name + bordered flight number ───
+            if all_same_airline and logo_bytes:
+                try:
+                    from reportlab.lib.utils import ImageReader
+                    import io as _io
+
+                    rx_area_x = infox + 32*mm          # start of right empty area
+                    rx_area_w = W - MARGIN - 2*mm - rx_area_x
+                    cx_area   = rx_area_x + rx_area_w / 2  # centre of area
+
+                    # ── Logo (fit to available width, cap height at 14mm) ──
+                    ir     = ImageReader(_io.BytesIO(logo_bytes))
+                    iw, ih = ir.getSize()
+                    # Scale to fill available width first
+                    lg_w   = rx_area_w
+                    lg_h   = ih * (lg_w / iw)
+                    # Cap height at 14mm
+                    if lg_h > 14*mm:
+                        lg_h = 14*mm
+                        lg_w = iw * (lg_h / ih)
+                    lg_x = cx_area - lg_w / 2
+                    lg_y = bt - 3*mm - lg_h
+                    cv.drawImage(ImageReader(_io.BytesIO(logo_bytes)),
+                                 lg_x, lg_y, width=lg_w, height=lg_h,
+                                 preserveAspectRatio=True, mask='auto')
+
+                    # ── Airline name (centred, below logo) ──
+                    al_y = lg_y - 4*mm
+                    al_text = flight.get('operated_by', '')
+                    cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
+                    al_w = cv.stringWidth(al_text, "Helvetica", 6.5)
+                    if al_w > rx_area_w:
+                        while cv.stringWidth(al_text+'…','Helvetica',6.5) > rx_area_w and len(al_text)>3:
+                            al_text = al_text[:-1]
+                        al_text += '…'
+                        al_w = cv.stringWidth(al_text, "Helvetica", 6.5)
+                    cv.drawString(cx_area - al_w/2, al_y, al_text)
+
+                    # ── Bordered box for flight number only ──
+                    fn_text = flight.get('flight_no', '')
+                    cv.setFont("Helvetica-Bold", 11)
+                    fn_tw   = cv.stringWidth(fn_text, "Helvetica-Bold", 11)
+                    fn_pad_x = 4*mm
+                    fn_pad_y = 2*mm
+                    fn_bw   = fn_tw + fn_pad_x * 2
+                    fn_bh   = 7*mm
+                    fn_bx   = cx_area - fn_bw / 2
+                    fn_by   = al_y - 3*mm - fn_bh
+
+                    # Box with brand colour border
+                    cv.saveState()
+                    cv.setStrokeColor(BRAND)
+                    cv.setLineWidth(1.2)
+                    cv.roundRect(fn_bx, fn_by, fn_bw, fn_bh, 2, fill=0, stroke=1)
+                    cv.restoreState()
+
+                    # Flight number text centred in box
+                    cv.setFillColor(BRAND)
+                    cv.setFont("Helvetica-Bold", 11)
+                    cv.drawString(fn_bx + fn_pad_x, fn_by + (fn_bh - 4*mm)/2 + 1*mm, fn_text)
+
+                except Exception:
+                    pass
             cy -= CH + 3*mm
             if flight.get('transit'):
                 tr = flight['transit']
@@ -608,23 +709,66 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
         # ── Baggage + footer only on last chunk of last journey ─────────────
         is_last_overall = (ci == total_chunks - 1)
         if (not is_direct_rt and is_last_c and is_last_overall) or (is_direct_rt and ci == total_chunks - 1):
-            bag_y = cy - 3*mm
             all_f_bag = [f for p in pages for f in p.get('flights',[])]
             brows = [(f"{f.get('dep_city','')} -> {f.get('arr_city','')} ({f.get('flight_no','')})",
                       f"Carry-on: {f.get('carryon','-')}  |  Checked: {f.get('checked','-')}")
                      for f in all_f_bag]
-            box_h = 7*mm + len(brows)*9.5*mm + 4*mm
+
+            use_2col = len(brows) > 2
+            ROW_H    = 9.5*mm
+            HDR_H    = 7*mm
+            PAD      = 4*mm
+
+            if use_2col:
+                # Split rows into left and right columns
+                half     = (len(brows) + 1) // 2
+                left_r   = brows[:half]
+                right_r  = brows[half:]
+                col_rows = max(len(left_r), len(right_r))
+                box_h    = HDR_H + col_rows * ROW_H + PAD
+            else:
+                box_h    = HDR_H + len(brows) * ROW_H + PAD
+
+            # Stick baggage box right below last flight card
+            bag_y = cy - 3*mm
+            # Safety clamp — never overlap footer
+            footer_safe = MBOTTOM + 10*mm
+            if bag_y - box_h < footer_safe:
+                bag_y = footer_safe + box_h
+
+            bw = W - 2*MARGIN
             cv.setFillColor(colors.HexColor("#FDFBF3"))
             cv.setStrokeColor(colors.HexColor("#E8D98A")); cv.setLineWidth(0.5)
-            cv.roundRect(MARGIN, bag_y-box_h, W-2*MARGIN, box_h, 3, fill=1, stroke=1)
+            cv.roundRect(MARGIN, bag_y - box_h, bw, box_h, 3, fill=1, stroke=1)
             cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 8)
-            cv.drawString(MARGIN+4*mm, bag_y-5*mm, "BAGGAGE ALLOWANCE")
-            sy = bag_y-7*mm-2*mm
-            for seg_t, seg_d in brows:
-                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 7)
-                cv.drawString(MARGIN+4*mm, sy, seg_t); sy -= 4*mm
-                cv.setFillColor(GREY_DARK); cv.setFont("Helvetica", 6.5)
-                cv.drawString(MARGIN+4*mm, sy, seg_d); sy -= 5.5*mm
+            cv.drawString(MARGIN + 4*mm, bag_y - 5*mm, "BAGGAGE ALLOWANCE")
+
+            if use_2col:
+                col_w  = bw / 2
+                # Thin vertical divider between columns
+                div_x  = MARGIN + col_w
+                cv.saveState()
+                cv.setStrokeColor(colors.HexColor("#E8D98A")); cv.setLineWidth(0.4)
+                cv.line(div_x, bag_y - HDR_H, div_x, bag_y - box_h + 2*mm)
+                cv.restoreState()
+
+                def draw_col(rows, x_start):
+                    sy = bag_y - HDR_H - 2*mm
+                    for seg_t, seg_d in rows:
+                        cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 7)
+                        cv.drawString(x_start + 4*mm, sy, seg_t); sy -= 4*mm
+                        cv.setFillColor(GREY_DARK); cv.setFont("Helvetica", 6.5)
+                        cv.drawString(x_start + 4*mm, sy, seg_d); sy -= 5.5*mm
+
+                draw_col(left_r,  MARGIN)
+                draw_col(right_r, MARGIN + col_w)
+            else:
+                sy = bag_y - HDR_H - 2*mm
+                for seg_t, seg_d in brows:
+                    cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 7)
+                    cv.drawString(MARGIN + 4*mm, sy, seg_t); sy -= 4*mm
+                    cv.setFillColor(GREY_DARK); cv.setFont("Helvetica", 6.5)
+                    cv.drawString(MARGIN + 4*mm, sy, seg_d); sy -= 5.5*mm
 
         # Footer on every chunk
         hr(MBOTTOM+5*mm)
