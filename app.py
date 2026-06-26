@@ -362,30 +362,13 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             if logo_bytes:
                 logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
                                           colors.HexColor("#4E4E4E"))
-                # Calculate actual left edge of logo for collision guard
-                try:
-                    from reportlab.lib.utils import ImageReader as _IR
-                    import io as _lio
-                    _ir = _IR(_lio.BytesIO(logo_bytes))
-                    _iw, _ih = _ir.getSize()
-                    _lh = 30*mm
-                    _lw = _iw * (_lh / _ih)
-                    if _lw > 132*mm: _lw = 132*mm
-                    logo_left_x = W - MARGIN - _lw - 3*mm
-                except Exception:
-                    logo_left_x = W * 0.55
             else:
                 logo_bottom_y = H - T - 18*mm
-                logo_left_x   = W
 
-            # "Electronic ticket receipt" right after airline name — only if it fits
-            anw = cv.stringWidth(airline_name_str, "Helvetica-Bold", 18)
+            # "Electronic ticket receipt" below airline name, font size 10
             cv.setFillColor(colors.HexColor("#4E4E4E"))
-            cv.setFont("Helvetica", 8)
-            etr_x = MARGIN + anw + 4*mm
-            etr_w = cv.stringWidth("Electronic ticket receipt", "Helvetica", 8)
-            if etr_x + etr_w < logo_left_x:
-                cv.drawString(etr_x, H - T - 13*mm, "Electronic ticket receipt")
+            cv.setFont("Helvetica", 10)
+            cv.drawString(MARGIN, H - T - 23*mm, "Electronic ticket receipt")
 
             AFTER_LOGO_GAP = 5*mm
             divider_y = logo_bottom_y - AFTER_LOGO_GAP
@@ -524,29 +507,9 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 cv.drawString(MARGIN+4*mm+fnw+2*mm, cy-5.5*mm, "\u00b7")
                 cv.setFillColor(BLACK); cv.setFont("Helvetica", 8.5)
                 cv.drawString(MARGIN+4*mm+fnw+5*mm, cy-5.5*mm, flight.get('operated_by',''))
-                # Small logo on right side of card header
-                try:
-                    from reportlab.lib.utils import ImageReader
-                    import io as _io
-                    ir   = ImageReader(_io.BytesIO(logo_bytes))
-                    iw, ih = ir.getSize()
-                    scale  = CARD_LOGO_H / ih
-                    cl_w   = iw * scale
-                    if cl_w > CARD_LOGO_MAX:
-                        scale = CARD_LOGO_MAX / iw
-                        cl_w  = CARD_LOGO_MAX
-                    cl_h  = ih * scale
-                    cl_x  = W - MARGIN - 2*mm - cl_w
-                    cl_y  = cy - 8*mm + (8*mm - cl_h) / 2
-                    cv.drawImage(ImageReader(_io.BytesIO(logo_bytes)),
-                                 cl_x, cl_y, width=cl_w, height=cl_h,
-                                 preserveAspectRatio=True, mask='auto')
-                    # Cabin sits just left of logo
-                    cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-                    cv.drawRightString(cl_x - 3*mm, cy-5.5*mm, flight.get('cabin','Economy'))
-                except Exception:
-                    cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-                    cv.drawRightString(W-MARGIN-2*mm, cy-5.5*mm, flight.get('cabin','Economy'))
+                # Cabin right-aligned
+                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+                cv.drawRightString(W-MARGIN-2*mm, cy-5.5*mm, flight.get('cabin','Economy'))
             else:
                 # Different airlines — text name + cabin right-aligned
                 cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 9)
