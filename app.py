@@ -585,10 +585,17 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 cv.drawString(mid_x - tw/2, arrow_y - 6.5*mm, ts_lbl)
             rows = [("Fare type", flight.get('fare_type','-')), ("Seat", flight.get('seat','-')),
                     ("Carry-on",  flight.get('carryon','-')),   ("Checked", flight.get('checked','-'))]
+            if flight.get('meal'):
+                rows.append(("Meal", "Confirmed"))
             ry2 = bt-2*mm
             for lbl2, val2 in rows:
                 cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7); cv.drawString(infox, ry2, lbl2)
-                cv.setFillColor(BLACK); cv.setFont("Helvetica", 7.5); cv.drawString(infox+18*mm, ry2, val2)
+                # Meal "Confirmed" in green
+                if lbl2 == "Meal":
+                    cv.setFillColor(colors.HexColor("#1E8449")); cv.setFont("Helvetica-Bold", 7.5)
+                else:
+                    cv.setFillColor(BLACK); cv.setFont("Helvetica", 7.5)
+                cv.drawString(infox+18*mm, ry2, val2)
                 ry2 -= 5*mm
             cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7); cv.drawString(infox, ry2, "Status")
             cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 7.5); cv.drawString(infox+18*mm, ry2, flight.get('status','CONFIRMED'))
@@ -784,6 +791,10 @@ def generate():
         logo_bytes = logo_file.read()
         logo_ext   = logo_file.filename.rsplit('.', 1)[-1].lower()
 
+    # Read new fields
+    checked_baggage = request.form.get('checked_baggage','').strip()
+    meal_included   = request.form.get('meal_included','') == '1'
+
     try:
         pdf_bytes_list = [f.read() for f in files]
         data = extract_with_groq(pdf_bytes_list)
@@ -800,16 +811,26 @@ def generate():
                     data['brand_hex'] = hx
                     break
 
-        # Apply carry-on rule to every flight on every page
+        # Apply rules to every flight on every page
         carryon = get_carryon(data.get('airline_name', ''))
         for page in data.get('pages', []):
             for flight in page.get('flights', []):
+                # Carry-on rule
                 flight['carryon'] = carryon
+                # Checked baggage override
+                if checked_baggage:
+                    flight['checked'] = checked_baggage
+                # Meal
+                flight['meal'] = meal_included
+                # HK status → CONFIRMED
+                if flight.get('status','').upper() == 'HK':
+                    flight['status'] = 'CONFIRMED'
 
         pdf_path = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext)
-        pax      = re.sub(r'\s+', '_', data.get('passenger_name','PASSENGER')).upper()
-        tkt      = re.sub(r'[^0-9]', '', data.get('ticket_number',''))
-        filename = f"eticket_{tkt}_{pax}.pdf"
+        pnr       = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper())
+        full_name = data.get('passenger_name','PASSENGER').strip().upper()
+        firstname = re.sub(r'\s+', '_', full_name.split()[0]) if full_name else 'PASSENGER'
+        filename  = f"{pnr}_{firstname}.pdf"
 
         return send_file(pdf_path, as_attachment=True,
                          download_name=filename, mimetype='application/pdf')
