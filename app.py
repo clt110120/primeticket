@@ -52,9 +52,11 @@ def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
     from reportlab.lib.utils import ImageReader
     import io
     T          = MTOP
-    LOGO_H     = 30 * mm
-    LOGO_MAX_W = 132 * mm
-    logo_top   = H - T - 5*mm    # just below brand bar
+    # For compact layouts (direct RT, MTOP < 20mm), start logo lower to avoid covering airline name
+    logo_start_offset = 18*mm if MTOP < 20*mm else 5*mm
+    LOGO_H     = 15 * mm if MTOP < 20*mm else 30 * mm
+    LOGO_MAX_W = 66 * mm if MTOP < 20*mm else 132 * mm
+    logo_top   = H - T - logo_start_offset
 
     try:
         ir     = ImageReader(io.BytesIO(logo_bytes))
@@ -267,8 +269,9 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
 
     # Margins and spacing
     if is_direct_rt:
+        # Single page: compact header (no big logo), tight margins
         MARGIN       = 12 * mm
-        MTOP         = 14 * mm
+        MTOP         = 12 * mm
         MBOTTOM      = 12 * mm
         EXTRA_GAP    = 0 * mm
     elif is_single_direct:
@@ -357,13 +360,13 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             airline_name_str = data.get('airline_name', '').upper()
             cv.drawString(MARGIN, H - T - 16*mm, airline_name_str)
 
-            # "Electronic ticket receipt" right after airline name on same line
-            # Logo (top right) — draw first to get actual logo left edge
-            if logo_bytes:
+            # Logo (top right) — skip for direct RT to keep header compact
+            if logo_bytes and not is_direct_rt:
                 logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
                                           colors.HexColor("#4E4E4E"))
             else:
-                logo_bottom_y = H - T - 18*mm
+                # No logo: set logo_bottom_y just below airline name + ETR label
+                logo_bottom_y = H - T - 25*mm
 
             # "Electronic ticket receipt" below airline name, font size 10
             cv.setFillColor(colors.HexColor("#4E4E4E"))
@@ -381,9 +384,9 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             pax_y = divider_y - 9*mm
             cv.drawString(MARGIN, pax_y, pax.strip())
 
-            # Right column
+            # Right column — anchored to divider_y so it stays in the header zone
             rx = W - MARGIN
-            ry = logo_bottom_y - AFTER_LOGO_GAP - 4*mm
+            ry = divider_y - 4*mm
             cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
             cv.drawRightString(rx, ry, f"{data.get('airline_name','')} reference")
             ry -= 5*mm
@@ -437,43 +440,46 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cy = bottom_divider_y - 5*mm - EXTRA_GAP
 
         else:
-            # Continuation chunk (not first, not direct_rt):
-            # compact header with just airline name + dots for remaining flights
-            cv.setFillColor(BRAND)
-            cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
-            cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 14)
-            cv.drawString(MARGIN, H - T - 14*mm, data.get('airline_name', '').upper())
-            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
-            cv.drawRightString(W-MARGIN, H-T-11*mm, "Continued")
+            if is_direct_rt:
+                # Direct RT ci>0: content continues on same page, cy already set
+                pass
+            else:
+                # Continuation chunk on new page — compact header + mini dot map
+                cv.setFillColor(BRAND)
+                cv.rect(0, H - T - 4*mm, W, 4*mm, fill=1, stroke=0)
+                cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 14)
+                cv.drawString(MARGIN, H - T - 14*mm, data.get('airline_name', '').upper())
+                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
+                cv.drawRightString(W-MARGIN, H-T-11*mm, "Continued")
 
-            # Mini dot map for remaining flights in this chunk
-            rem_codes = [flights[0]['dep_code']] + [f['arr_code'] for f in flights]
-            rem_dates = [flights[0]['dep_date']] + [f['arr_date'] for f in flights]
-            rem_fnos  = [f['flight_no'] for f in flights]
-            dot_y2 = H - T - 30*mm
-            xs2 = 18*mm; xe2 = W / 2
-            gap2 = (xe2 - xs2) / (len(rem_codes) - 1) if len(rem_codes) > 1 else 0
-            for i, (code, date) in enumerate(zip(rem_codes, rem_dates)):
-                cx = xs2 + i * gap2
-                cv.setFillColor(BRAND); cv.circle(cx, dot_y2, 3, fill=1, stroke=0)
-                cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
-                dw = cv.stringWidth(date, "Helvetica", 6.5)
-                cv.drawString(cx - dw/2, dot_y2 + 5*mm, date)
-                cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
-                cw = cv.stringWidth(code, "Helvetica-Bold", 8)
-                cv.drawString(cx - cw/2, dot_y2 - 6*mm, code)
-                if i < len(rem_fnos):
-                    nx = xs2 + (i+1)*gap2; mid = (cx+nx)/2
-                    cv.saveState()
-                    cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.8); cv.setDash([2,2],0)
-                    cv.line(cx+3, dot_y2, nx-3, dot_y2)
-                    cv.restoreState()
+                # Mini dot map for remaining flights in this chunk
+                rem_codes = [flights[0]['dep_code']] + [f['arr_code'] for f in flights]
+                rem_dates = [flights[0]['dep_date']] + [f['arr_date'] for f in flights]
+                rem_fnos  = [f['flight_no'] for f in flights]
+                dot_y2 = H - T - 30*mm
+                xs2 = 18*mm; xe2 = W / 2
+                gap2 = (xe2 - xs2) / (len(rem_codes) - 1) if len(rem_codes) > 1 else 0
+                for i, (code, date) in enumerate(zip(rem_codes, rem_dates)):
+                    cx = xs2 + i * gap2
+                    cv.setFillColor(BRAND); cv.circle(cx, dot_y2, 3, fill=1, stroke=0)
                     cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
-                    fw = cv.stringWidth(rem_fnos[i], "Helvetica", 6.5)
-                    cv.drawString(mid - fw/2, dot_y2 - 5.5*mm, rem_fnos[i])
+                    dw = cv.stringWidth(date, "Helvetica", 6.5)
+                    cv.drawString(cx - dw/2, dot_y2 + 5*mm, date)
+                    cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
+                    cw = cv.stringWidth(code, "Helvetica-Bold", 8)
+                    cv.drawString(cx - cw/2, dot_y2 - 6*mm, code)
+                    if i < len(rem_fnos):
+                        nx = xs2 + (i+1)*gap2; mid = (cx+nx)/2
+                        cv.saveState()
+                        cv.setStrokeColor(GREY_LINE); cv.setLineWidth(0.8); cv.setDash([2,2],0)
+                        cv.line(cx+3, dot_y2, nx-3, dot_y2)
+                        cv.restoreState()
+                        cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
+                        fw = cv.stringWidth(rem_fnos[i], "Helvetica", 6.5)
+                        cv.drawString(mid - fw/2, dot_y2 - 5.5*mm, rem_fnos[i])
 
-            hr(dot_y2 - 12*mm, lw=0.5)
-            cy = dot_y2 - 18*mm
+                hr(dot_y2 - 12*mm, lw=0.5)
+                cy = dot_y2 - 18*mm
 
         # ── Section label bar for direct RT ────────────────────────────────
         if is_direct_rt and page_label:
