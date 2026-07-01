@@ -527,6 +527,17 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
 
             hr(cy-8*mm, x1=MARGIN, x2=MARGIN+CW)
             bt = cy-10*mm; lx = MARGIN+4*mm; infox = W*0.62
+
+            def to12(t24):
+                """Convert HH:MM 24h to 12h am/pm label."""
+                try:
+                    h, m = map(int, t24.split(':'))
+                    suffix = 'am' if h < 12 else 'pm'
+                    h12 = h % 12 or 12
+                    return f"{h12}:{m:02d}{suffix}"
+                except Exception:
+                    return ''
+
             cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
             cv.drawString(lx, bt-2*mm, flight.get('dep_city',''))
             acw = cv.stringWidth(flight.get('arr_city',''), "Helvetica", 7.5)
@@ -537,9 +548,19 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             acw26 = cv.stringWidth(flight.get('arr_code',''), "Helvetica-Bold", 26)
             arr_col = infox-2*mm-acw26-10*mm
             cv.drawString(arr_col, bt-12*mm, flight.get('arr_code',''))
+
+            # Departure time (bold) + 12hr in grey
+            dep_t = flight.get('dep_time','')
+            arr_t = flight.get('arr_time','')
             cv.setFillColor(GREY_DARK); cv.setFont("Helvetica-Bold", 9)
-            cv.drawString(lx, bt-16*mm, flight.get('dep_time',''))
-            cv.drawString(arr_col, bt-16*mm, flight.get('arr_time',''))
+            cv.drawString(lx, bt-16*mm, dep_t)
+            dep_tw = cv.stringWidth(dep_t, "Helvetica-Bold", 9)
+            cv.drawString(arr_col, bt-16*mm, arr_t)
+            arr_tw = cv.stringWidth(arr_t, "Helvetica-Bold", 9)
+            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
+            cv.drawString(lx + dep_tw + 1.5*mm, bt-15.5*mm, f"({to12(dep_t)})")
+            cv.drawString(arr_col + arr_tw + 1.5*mm, bt-15.5*mm, f"({to12(arr_t)})")
+
             cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7.5)
             cv.drawString(lx, bt-20*mm, flight.get('dep_date',''))
             cv.drawString(arr_col, bt-20*mm, flight.get('arr_date',''))
@@ -583,8 +604,9 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 cv.setFont("Helvetica", 5)
                 tw = cv.stringWidth(ts_lbl, "Helvetica", 5)
                 cv.drawString(mid_x - tw/2, arrow_y - 6.5*mm, ts_lbl)
-            rows = [("Fare type", flight.get('fare_type','-')), ("Seat", flight.get('seat','-')),
-                    ("Carry-on",  flight.get('carryon','-')),   ("Checked", flight.get('checked','-'))]
+            rows = [("Seat",     flight.get('seat','-')),
+                    ("Carry-on", flight.get('carryon','-')),
+                    ("Checked",  flight.get('checked','-'))]
             if flight.get('meal'):
                 rows.append(("Meal", "Confirmed"))
             ry2 = bt-2*mm
