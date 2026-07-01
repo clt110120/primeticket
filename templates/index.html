@@ -127,6 +127,17 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
           onchange="handleLogo(this.files[0])">
       </div>
     </div>
+    <div class="grid">
+      <div><label>Checked baggage <span style="font-weight:400;color:#bbb;">(override all flights)</span></label>
+        <input type="text" id="f-checked" placeholder="e.g. 30 kg or 2 Pieces">
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;padding-top:18px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;font-size:13px;color:#333;">
+          <input type="checkbox" id="f-meal" style="width:16px;height:16px;cursor:pointer;accent-color:#1a1a1a;">
+          Meal included
+        </label>
+      </div>
+    </div>
   </div>
 
   <!-- Step 3 -->
@@ -195,8 +206,9 @@ function clearAll(){
   logoFile=null;
   render();
   removeLogo({stopPropagation:()=>{}});
-  ['f-pax','f-tkt','f-pnr','f-air','f-dt','f-col'].forEach(id=>document.getElementById(id).value='');
+  ['f-pax','f-tkt','f-pnr','f-air','f-dt','f-col','f-checked'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('f-ttl').value='';
+  document.getElementById('f-meal').checked=false;
   status('','');
   progress(0);
 }
@@ -222,11 +234,13 @@ async function run(){
   files.forEach(f=>fd.append('pdfs',f));
   if(logoFile) fd.append('logo', logoFile);
   const map={passenger_name:'f-pax',title:'f-ttl',ticket_number:'f-tkt',
-    booking_ref:'f-pnr',airline_name:'f-air',date_of_issue:'f-dt',brand_hex:'f-col'};
+    booking_ref:'f-pnr',airline_name:'f-air',date_of_issue:'f-dt',brand_hex:'f-col',
+    checked_baggage:'f-checked'};
   for(const[k,id] of Object.entries(map)){
     const v=document.getElementById(id).value.trim();
     if(v) fd.append(k,v);
   }
+  if(document.getElementById('f-meal').checked) fd.append('meal_included','1');
 
   try{
     progress(35);
