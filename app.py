@@ -211,6 +211,9 @@ def shorten_airline(name):
         truncated = n[:20].rsplit(' ', 1)[0]
         return truncated + '…'
     return n
+
+
+def pick_airline_ref(data):
     """
     If all_refs has 2+ entries, pick the airline reference.
     Falls back to booking_ref if none clearly identified.
