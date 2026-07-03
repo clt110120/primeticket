@@ -207,9 +207,8 @@ def shorten_airline(name):
     # Generic truncation: if name contains "airlines" or "airways" keep as-is up to 22 chars
     # otherwise append nothing; just cap at 22 chars
     if len(n) > 22:
-        # Try to end at a word boundary
         truncated = n[:20].rsplit(' ', 1)[0]
-        return truncated + '…'
+        return truncated
     return n
 
 
@@ -699,13 +698,12 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
 
                     # ── Airline name (centred, below logo) ──
                     al_y = lg_y - 4*mm
-                    al_text = flight.get('operated_by', '')
+                    al_text = shorten_airline(flight.get('operated_by', ''))
                     cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 6.5)
                     al_w = cv.stringWidth(al_text, "Helvetica", 6.5)
-                    if al_w > rx_area_w:
-                        while cv.stringWidth(al_text+'…','Helvetica',6.5) > rx_area_w and len(al_text)>3:
-                            al_text = al_text[:-1]
-                        al_text += '…'
+                    # Trim to fit if still too wide
+                    while al_w > rx_area_w and len(al_text) > 3:
+                        al_text = al_text[:-1]
                         al_w = cv.stringWidth(al_text, "Helvetica", 6.5)
                     cv.drawString(cx_area - al_w/2, al_y, al_text)
 
