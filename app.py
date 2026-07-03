@@ -161,7 +161,56 @@ AGENCY_REF_KEYWORDS = [
     "booking no", "booking number", "booking ref", "order", "itinerary"
 ]
 
-def pick_airline_ref(data):
+def shorten_airline(name):
+    """Standardise long airline names to short form."""
+    if not name:
+        return name
+    n = name.strip()
+    # Direct replacements first
+    REPLACEMENTS = {
+        'srilankan airlines': 'SriLankan Airlines',
+        'sri lankan airlines': 'SriLankan Airlines',
+        'qatar airways': 'Qatar Airways',
+        'gulf air': 'Gulf Air',
+        'etihad airways': 'Etihad Airways',
+        'emirates airline': 'Emirates',
+        'emirates airlines': 'Emirates',
+        'air arabia': 'Air Arabia',
+        'flydubai': 'flydubai',
+        'flynas': 'flynas',
+        'salam air': 'SalamAir',
+        'salamair': 'SalamAir',
+        'indigo': 'IndiGo',
+        'interglobe aviation': 'IndiGo',
+        'air india': 'Air India',
+        'singapore airlines': 'Singapore Airlines',
+        'thai airways international': 'Thai Airways',
+        'thai airways intl': 'Thai Airways',
+        'lufthansa german airlines': 'Lufthansa',
+        'british airways': 'British Airways',
+        'malaysia airlines': 'Malaysia Airlines',
+        'malindo air': 'Malindo Air',
+        'batik air': 'Batik Air',
+        'air asia': 'AirAsia',
+        'airasia': 'AirAsia',
+        'turkish airlines': 'Turkish Airlines',
+        'oman air': 'Oman Air',
+        'kuwait airways': 'Kuwait Airways',
+        'royal jordanian': 'Royal Jordanian',
+        'egyptair': 'EgyptAir',
+        'egypt air': 'EgyptAir',
+    }
+    low = n.lower()
+    for k, v in REPLACEMENTS.items():
+        if low == k:
+            return v
+    # Generic truncation: if name contains "airlines" or "airways" keep as-is up to 22 chars
+    # otherwise append nothing; just cap at 22 chars
+    if len(n) > 22:
+        # Try to end at a word boundary
+        truncated = n[:20].rsplit(' ', 1)[0]
+        return truncated + '…'
+    return n
     """
     If all_refs has 2+ entries, pick the airline reference.
     Falls back to booking_ref if none clearly identified.
@@ -398,9 +447,6 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             ry -= 5*mm
             cv.setFillColor(BLACK); cv.setFont("Helvetica-Bold", 8)
             cv.drawRightString(rx, ry, data.get('ticket_number', ''))
-            ry -= 6*mm
-            cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
-            cv.drawRightString(rx, ry, f"Date of issue  {data.get('date_of_issue','')}")
 
             # Thank you lines
             ty_y = pax_y - 9*mm
@@ -769,6 +815,28 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                     cv.drawString(MARGIN + 4*mm, sy, seg_d); sy -= 5.5*mm
 
         # Footer on every chunk
+        # ── Policy notice above footer ─────────────────────────────────────
+        policy = data.get('ticket_policy','')
+        POLICY_TEXTS = {
+            'non_refundable': '⚠  This ticket is non-refundable. No refunds will be issued for cancellations or no-shows.',
+            'change_24h':     'ℹ  Changes to this ticket must be requested at least 24 hours before departure. Fees may apply.',
+            'change_48h':     'ℹ  Changes to this ticket must be requested at least 48 hours before departure. Fees may apply.',
+        }
+        if policy and policy in POLICY_TEXTS:
+            notice_text = POLICY_TEXTS[policy]
+            notice_col  = colors.HexColor("#7D3C00") if policy == 'non_refundable' else colors.HexColor("#1A5276")
+            bg_col      = colors.HexColor("#FEF9E7") if policy == 'non_refundable' else colors.HexColor("#EBF5FB")
+            notice_y    = MBOTTOM + 14*mm
+            notice_h    = 7*mm
+            cv.setFillColor(bg_col)
+            cv.roundRect(MARGIN, notice_y - notice_h + 2*mm, W - 2*MARGIN, notice_h, 2, fill=1, stroke=0)
+            cv.saveState()
+            cv.setStrokeColor(notice_col); cv.setLineWidth(0.4)
+            cv.roundRect(MARGIN, notice_y - notice_h + 2*mm, W - 2*MARGIN, notice_h, 2, fill=0, stroke=1)
+            cv.restoreState()
+            cv.setFillColor(notice_col); cv.setFont("Helvetica", 7)
+            cv.drawString(MARGIN + 3*mm, notice_y - 3.5*mm, notice_text)
+
         hr(MBOTTOM+5*mm)
         cv.setFillColor(GREY_MID); cv.setFont("Helvetica", 7)
         cv.drawString(MARGIN, MBOTTOM+1.5*mm, "All times are local to each city")
@@ -800,7 +868,7 @@ def generate():
 
     overrides = {}
     for field in ['passenger_name','title','ticket_number','booking_ref',
-                  'airline_name','date_of_issue','brand_hex']:
+                  'airline_name','brand_hex']:
         val = request.form.get(field, '').strip()
         if val:
             overrides[field] = val
@@ -816,11 +884,18 @@ def generate():
     # Read new fields
     checked_baggage = request.form.get('checked_baggage','').strip()
     meal_included   = request.form.get('meal_included','') == '1'
+    ticket_policy   = request.form.get('ticket_policy','').strip()
 
     try:
         pdf_bytes_list = [f.read() for f in files]
         data = extract_with_groq(pdf_bytes_list)
         data.update(overrides)
+
+        # Shorten/standardise airline name
+        data['airline_name'] = shorten_airline(data.get('airline_name',''))
+
+        # Store policy on data for PDF renderer
+        data['ticket_policy'] = ticket_policy
 
         # If 2+ references found, always use the airline reference
         if 'booking_ref' not in overrides:
