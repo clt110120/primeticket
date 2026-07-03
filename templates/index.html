@@ -97,9 +97,6 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
     </div>
     <div class="grid">
       <div><label>Airline name</label><input type="text" id="f-air" placeholder="Auto-extracted"></div>
-      <div><label>Date of issue</label><input type="text" id="f-dt" placeholder="e.g. 25 Jun 2026"></div>
-    </div>
-    <div class="grid one">
       <div><label>Brand colour</label>
         <div class="crow">
           <input type="text" id="f-col" placeholder="Auto-detected from airline e.g. #5C0632">
@@ -136,6 +133,16 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
           <input type="checkbox" id="f-meal" style="width:16px;height:16px;cursor:pointer;accent-color:#1a1a1a;">
           Meal included
         </label>
+      </div>
+    </div>
+    <div class="grid one">
+      <div><label>Ticket policy notice</label>
+        <select id="f-policy">
+          <option value="">None</option>
+          <option value="non_refundable">Non-Refundable</option>
+          <option value="change_24h">Changes allowed up to 24 hours before departure</option>
+          <option value="change_48h">Changes allowed up to 48 hours before departure</option>
+        </select>
       </div>
     </div>
   </div>
@@ -206,9 +213,10 @@ function clearAll(){
   logoFile=null;
   render();
   removeLogo({stopPropagation:()=>{}});
-  ['f-pax','f-tkt','f-pnr','f-air','f-dt','f-col','f-checked'].forEach(id=>document.getElementById(id).value='');
+  ['f-pax','f-tkt','f-pnr','f-air','f-col','f-checked'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('f-ttl').value='';
   document.getElementById('f-meal').checked=false;
+  document.getElementById('f-policy').value='';
   status('','');
   progress(0);
 }
@@ -234,13 +242,15 @@ async function run(){
   files.forEach(f=>fd.append('pdfs',f));
   if(logoFile) fd.append('logo', logoFile);
   const map={passenger_name:'f-pax',title:'f-ttl',ticket_number:'f-tkt',
-    booking_ref:'f-pnr',airline_name:'f-air',date_of_issue:'f-dt',brand_hex:'f-col',
+    booking_ref:'f-pnr',airline_name:'f-air',brand_hex:'f-col',
     checked_baggage:'f-checked'};
   for(const[k,id] of Object.entries(map)){
     const v=document.getElementById(id).value.trim();
     if(v) fd.append(k,v);
   }
   if(document.getElementById('f-meal').checked) fd.append('meal_included','1');
+  const policy = document.getElementById('f-policy').value;
+  if(policy) fd.append('ticket_policy', policy);
 
   try{
     progress(35);
