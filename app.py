@@ -1,4 +1,4 @@
-import os, json, re, tempfile
+import os, json, re, tempfile, zipfile
 from flask import Flask, request, jsonify, send_file, render_template
 from groq import Groq
 import fitz  # PyMuPDF
@@ -949,23 +949,38 @@ def generate():
                     flight['status'] = 'CONFIRMED'
 
         passengers = data.get('passengers', [])
-        pnr = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper())
+        # Guard: if passengers list is empty, create a fallback entry
+        if not passengers:
+            passengers = [{'passenger_name': data.get('passenger_name','PASSENGER'),
+                           'title': data.get('title',''),
+                           'ticket_number': data.get('ticket_number','')}]
+            data['passengers'] = passengers
 
-        # Single passenger → return single PDF directly
-        if len(passengers) == 1:
-            pax = passengers[0]
+        pnr = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper()) or 'TICKET'
+
+        # Decide whether to split: only if there are multiple DISTINCT ticket numbers
+        ticket_numbers = [p.get('ticket_number','').strip() for p in passengers]
+        distinct_tickets = list(dict.fromkeys(t for t in ticket_numbers if t))  # unique, order-preserving
+        split_into_multiple = len(distinct_tickets) > 1
+
+        if not split_into_multiple:
+            # Single PDF — combine all passenger names on one ticket
+            # Use first passenger's ticket number (they're the same or only one exists)
+            combined_names = ', '.join(
+                (p.get('title','') + ' ' + p.get('passenger_name','')).strip()
+                for p in passengers
+            )
             pax_data = {**data,
-                        'passenger_name': pax.get('passenger_name','PASSENGER'),
-                        'title':          pax.get('title',''),
-                        'ticket_number':  pax.get('ticket_number','')}
+                        'passenger_name': combined_names,
+                        'title':          '',
+                        'ticket_number':  distinct_tickets[0] if distinct_tickets else ''}
             pdf_path  = generate_eticket_pdf(pax_data, logo_bytes=logo_bytes, logo_ext=logo_ext)
-            firstname = pax.get('passenger_name','PASSENGER').strip().upper().split()[0]
+            firstname = passengers[0].get('passenger_name','PASSENGER').strip().upper().split()[0]
             filename  = f"{pnr}_{firstname}.pdf"
             return send_file(pdf_path, as_attachment=True,
                              download_name=filename, mimetype='application/pdf')
 
-        # Multiple passengers → generate one PDF each and zip them
-        import zipfile, tempfile
+        # Multiple distinct ticket numbers → one PDF per passenger, zipped
         zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
         zip_tmp.close()
         with zipfile.ZipFile(zip_tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
