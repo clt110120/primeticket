@@ -86,15 +86,18 @@ EXTRACT_PROMPT = """You are a flight data extractor. Extract all flight booking 
 
 Use this exact structure:
 {
-  "passenger_name": "FULL NAME IN CAPS",
-  "title": "MR or MRS or MS or DR or empty string",
-  "ticket_number": "ticket number as string",
+  "passengers": [
+    {
+      "passenger_name": "FULL NAME IN CAPS",
+      "title": "MR or MRS or MS or DR or empty string",
+      "ticket_number": "ticket number as string"
+    }
+  ],
   "booking_ref": "PNR / airline booking reference",
   "all_refs": [
     {"label": "Airline Booking Reference or Agency Ref or PNR etc", "value": "XXXXXX"}
   ],
   "airline_name": "Full airline name",
-  "date_of_issue": "DD Mon YYYY",
   "brand_hex": "#hexcolor",
   "pages": [
     {
@@ -131,6 +134,9 @@ Use this exact structure:
 }
 
 Rules:
+- Always put passengers in the "passengers" array, even if there is only one passenger
+- Each passenger has their own name, title, and ticket number
+- All passengers share the same flights (pages), booking_ref, and airline info
 - Extract ALL reference numbers found in the document into "all_refs" list (airline ref, agency ref, booking number, PNR, etc.)
 - For "booking_ref" pick the airline's own reference (not agency/trip.com/booking.com ref)
 - If there is a layover/transfer BETWEEN two flights, set transit on the FIRST flight:
@@ -868,8 +874,7 @@ def generate():
         return jsonify({'error': 'No PDF files uploaded'}), 400
 
     overrides = {}
-    for field in ['passenger_name','title','ticket_number','booking_ref',
-                  'airline_name','brand_hex']:
+    for field in ['booking_ref', 'airline_name', 'brand_hex']:
         val = request.form.get(field, '').strip()
         if val:
             overrides[field] = val
@@ -887,21 +892,44 @@ def generate():
     meal_included   = request.form.get('meal_included','') == '1'
     ticket_policy   = request.form.get('ticket_policy','').strip()
 
+    # Manual passenger override (from form)
+    manual_pax_name   = request.form.get('passenger_name','').strip()
+    manual_pax_title  = request.form.get('title','').strip()
+    manual_pax_ticket = request.form.get('ticket_number','').strip()
+
     try:
         pdf_bytes_list = [f.read() for f in files]
         data = extract_with_groq(pdf_bytes_list)
         data.update(overrides)
 
+        # Normalise: support both old single-pax and new multi-pax structure
+        if 'passengers' not in data:
+            # Old format: wrap in passengers list
+            data['passengers'] = [{
+                'passenger_name': data.get('passenger_name', 'PASSENGER'),
+                'title':          data.get('title', ''),
+                'ticket_number':  data.get('ticket_number', ''),
+            }]
+
+        # Manual override: if user filled in name/ticket, override first (or only) passenger
+        if manual_pax_name:
+            data['passengers'][0]['passenger_name'] = manual_pax_name
+        if manual_pax_title:
+            data['passengers'][0]['title'] = manual_pax_title
+        if manual_pax_ticket:
+            data['passengers'][0]['ticket_number'] = manual_pax_ticket
+
         # Shorten/standardise airline name
         data['airline_name'] = shorten_airline(data.get('airline_name',''))
 
-        # Store policy on data for PDF renderer
+        # Store policy for PDF renderer
         data['ticket_policy'] = ticket_policy
 
-        # If 2+ references found, always use the airline reference
+        # Pick best booking ref
         if 'booking_ref' not in overrides:
             data['booking_ref'] = pick_airline_ref(data)
 
+        # Auto brand colour
         if not data.get('brand_hex') or data['brand_hex'] in ('#1A1A1A','#000000',''):
             al = data.get('airline_name', '').lower()
             for key, hx in AIRLINE_BRANDS.items():
@@ -909,29 +937,51 @@ def generate():
                     data['brand_hex'] = hx
                     break
 
-        # Apply rules to every flight on every page
+        # Apply per-flight rules
         carryon = get_carryon(data.get('airline_name', ''))
         for page in data.get('pages', []):
             for flight in page.get('flights', []):
-                # Carry-on rule
                 flight['carryon'] = carryon
-                # Checked baggage override
                 if checked_baggage:
                     flight['checked'] = checked_baggage
-                # Meal
                 flight['meal'] = meal_included
-                # HK status → CONFIRMED
                 if flight.get('status','').upper() == 'HK':
                     flight['status'] = 'CONFIRMED'
 
-        pdf_path = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext)
-        pnr       = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper())
-        full_name = data.get('passenger_name','PASSENGER').strip().upper()
-        firstname = re.sub(r'\s+', '_', full_name.split()[0]) if full_name else 'PASSENGER'
-        filename  = f"{pnr}_{firstname}.pdf"
+        passengers = data.get('passengers', [])
+        pnr = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper())
 
-        return send_file(pdf_path, as_attachment=True,
-                         download_name=filename, mimetype='application/pdf')
+        # Single passenger → return single PDF directly
+        if len(passengers) == 1:
+            pax = passengers[0]
+            pax_data = {**data,
+                        'passenger_name': pax.get('passenger_name','PASSENGER'),
+                        'title':          pax.get('title',''),
+                        'ticket_number':  pax.get('ticket_number','')}
+            pdf_path  = generate_eticket_pdf(pax_data, logo_bytes=logo_bytes, logo_ext=logo_ext)
+            firstname = pax.get('passenger_name','PASSENGER').strip().upper().split()[0]
+            filename  = f"{pnr}_{firstname}.pdf"
+            return send_file(pdf_path, as_attachment=True,
+                             download_name=filename, mimetype='application/pdf')
+
+        # Multiple passengers → generate one PDF each and zip them
+        import zipfile, tempfile
+        zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+        zip_tmp.close()
+        with zipfile.ZipFile(zip_tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for pax in passengers:
+                pax_data = {**data,
+                            'passenger_name': pax.get('passenger_name','PASSENGER'),
+                            'title':          pax.get('title',''),
+                            'ticket_number':  pax.get('ticket_number','')}
+                pdf_path  = generate_eticket_pdf(pax_data, logo_bytes=logo_bytes, logo_ext=logo_ext)
+                firstname = pax.get('passenger_name','PASSENGER').strip().upper().split()[0]
+                pdf_name  = f"{pnr}_{firstname}.pdf"
+                zf.write(pdf_path, pdf_name)
+
+        zip_filename = f"{pnr}_tickets.zip"
+        return send_file(zip_tmp.name, as_attachment=True,
+                         download_name=zip_filename, mimetype='application/zip')
 
     except json.JSONDecodeError as e:
         return jsonify({'error': f'Could not parse flight data: {str(e)}'}), 422
