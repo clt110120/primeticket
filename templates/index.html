@@ -125,6 +125,8 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
           <input type="text" id="f-col" placeholder="Auto-detected from airline e.g. #5C0632">
           <input type="color" id="f-cpick" value="#111111"
             oninput="document.getElementById('f-col').value=this.value">
+          <button type="button" class="btn" id="f-detect-btn" style="padding:8px 10px;white-space:nowrap;"
+            onclick="detectColorFromLogo('f')" title="Detect brand colour from the uploaded logo" disabled>🎨 From logo</button>
         </div>
       </div>
     </div>
@@ -228,6 +230,8 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
           <input type="text" id="im-col" placeholder="e.g. #5C0632">
           <input type="color" id="im-cpick" value="#111111"
             oninput="document.getElementById('im-col').value=this.value">
+          <button type="button" class="btn" id="im-detect-btn" style="padding:8px 10px;white-space:nowrap;"
+            onclick="detectColorFromLogo('im')" title="Detect brand colour from the uploaded logo" disabled>🎨 From logo</button>
         </div>
       </div>
     </div>
@@ -330,6 +334,9 @@ function handleLogo(f) {
   document.getElementById('logo-placeholder').style.display = 'none';
   document.getElementById('logo-rm').style.display = 'block';
   document.getElementById('logo-zone').classList.add('has-logo');
+  document.getElementById('f-detect-btn').disabled = false;
+  // Auto-fill brand colour from the logo if the field is currently empty
+  autoApplyDetectedColor('f', f);
 }
 
 function removeLogo(e) {
@@ -341,6 +348,92 @@ function removeLogo(e) {
   document.getElementById('logo-placeholder').style.display = 'flex';
   document.getElementById('logo-rm').style.display = 'none';
   document.getElementById('logo-zone').classList.remove('has-logo');
+  document.getElementById('f-detect-btn').disabled = true;
+}
+
+// ===================== Dominant colour detection from logo =====================
+function detectDominantColor(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      try{
+        const size = 80;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+
+        const buckets = {};
+        for(let i=0; i<data.length; i+=4){
+          const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
+          if(a < 128) continue;                                  // transparent
+          if(r>235 && g>235 && b>235) continue;                  // near-white background
+          if(r<20 && g<20 && b<20) continue;                     // near-black
+          const max = Math.max(r,g,b), min = Math.min(r,g,b);
+          const sat = max===0 ? 0 : (max-min)/max;
+          const qr = Math.round(r/24)*24, qg = Math.round(g/24)*24, qb = Math.round(b/24)*24;
+          const key = qr+','+qg+','+qb;
+          if(!buckets[key]) buckets[key] = {count:0, r:0, g:0, b:0, sat:0};
+          buckets[key].count++;
+          buckets[key].r += r; buckets[key].g += g; buckets[key].b += b;
+          buckets[key].sat += sat;
+        }
+        URL.revokeObjectURL(url);
+
+        let best = null;
+        for(const k in buckets){
+          const bk = buckets[k];
+          const avgSat = bk.sat / bk.count;
+          const score = bk.count * (0.4 + avgSat);  // favour saturated brand colours over dull greys
+          if(!best || score > best.score) best = {...bk, score};
+        }
+        if(!best){ resolve(null); return; }
+        const r = Math.round(best.r/best.count);
+        const g = Math.round(best.g/best.count);
+        const b = Math.round(best.b/best.count);
+        const hex = '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+        resolve(hex);
+      }catch(e){
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not load image')); };
+    img.src = url;
+  });
+}
+
+async function autoApplyDetectedColor(prefix, file){
+  // Only auto-fill if the colour field is currently empty — never overwrite a manual edit
+  const colField = document.getElementById(prefix+'-col');
+  if(colField.value.trim()) return;
+  try{
+    const hex = await detectDominantColor(file);
+    if(hex){
+      colField.value = hex;
+      document.getElementById(prefix+'-cpick').value = hex;
+    }
+  }catch(e){ /* non-critical — silently ignore */ }
+}
+
+async function detectColorFromLogo(prefix){
+  const file = prefix === 'f' ? logoFile : imLogoFile;
+  if(!file) return;
+  const btn = document.getElementById(prefix+'-detect-btn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳';
+  try{
+    const hex = await detectDominantColor(file);
+    if(hex){
+      document.getElementById(prefix+'-col').value = hex;
+      document.getElementById(prefix+'-cpick').value = hex;
+    }
+  }catch(e){ /* ignore */ }
+  btn.disabled = false;
+  btn.innerHTML = original;
 }
 
 function clearAll(){
@@ -462,6 +555,8 @@ function handleImLogo(f){
   document.getElementById('im-logo-placeholder').style.display = 'none';
   document.getElementById('im-logo-rm').style.display = 'block';
   document.getElementById('im-logo-zone').classList.add('has-logo');
+  document.getElementById('im-detect-btn').disabled = false;
+  autoApplyDetectedColor('im', f);
 }
 function removeImLogo(e){
   if(e) e.stopPropagation();
@@ -472,6 +567,7 @@ function removeImLogo(e){
   document.getElementById('im-logo-placeholder').style.display = 'flex';
   document.getElementById('im-logo-rm').style.display = 'none';
   document.getElementById('im-logo-zone').classList.remove('has-logo');
+  document.getElementById('im-detect-btn').disabled = true;
 }
 
 // ===================== IMAGE TAB: auto-fill via Groq vision =====================
