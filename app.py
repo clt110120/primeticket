@@ -1004,6 +1004,75 @@ def generate():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/generate-manual', methods=['POST'])
+def generate_manual():
+    """Generate a ticket PDF from manually entered data (Image to PDF tab)."""
+    try:
+        raw = request.form.get('data', '')
+        if not raw:
+            return jsonify({'error': 'No ticket data received'}), 400
+        data = json.loads(raw)
+
+        if not data.get('passenger_name', '').strip():
+            return jsonify({'error': 'Passenger name is required'}), 400
+        if not data.get('pages') or not any(p.get('flights') for p in data['pages']):
+            return jsonify({'error': 'At least one flight is required'}), 400
+
+        # Read uploaded logo if provided
+        logo_bytes = None
+        logo_ext   = None
+        logo_file  = request.files.get('logo')
+        if logo_file and logo_file.filename:
+            logo_bytes = logo_file.read()
+            logo_ext   = logo_file.filename.rsplit('.', 1)[-1].lower()
+
+        checked_baggage = data.pop('checked_baggage', '').strip()
+        meal_included   = bool(data.pop('meal_included', False))
+        ticket_policy   = data.pop('ticket_policy', '').strip()
+
+        # Standardise airline name
+        data['airline_name'] = shorten_airline(data.get('airline_name', ''))
+        data['ticket_policy'] = ticket_policy
+
+        # Auto brand colour if not supplied
+        if not data.get('brand_hex'):
+            al = data.get('airline_name', '').lower()
+            for key, hx in AIRLINE_BRANDS.items():
+                if key in al:
+                    data['brand_hex'] = hx
+                    break
+            else:
+                data['brand_hex'] = '#1A1A1A'
+
+        # Apply same per-flight rules as the PDF-extraction flow
+        for page in data.get('pages', []):
+            for flight in page.get('flights', []):
+                if not flight.get('carryon'):
+                    flight['carryon'] = get_carryon(data.get('airline_name', ''))
+                if checked_baggage:
+                    flight['checked'] = checked_baggage
+                flight['meal'] = meal_included
+                if flight.get('status', '').upper() == 'HK':
+                    flight['status'] = 'CONFIRMED'
+                # Ensure required keys exist so the renderer never KeyErrors
+                for k, default in [('fare_type','-'), ('seat','-'), ('aircraft',''),
+                                    ('status','CONFIRMED'), ('dep_terminal',''), ('arr_terminal','')]:
+                    flight.setdefault(k, default)
+
+        pdf_path  = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext)
+        pnr       = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper()) or 'TICKET'
+        firstname = data.get('passenger_name','PASSENGER').strip().upper().split()[0]
+        filename  = f"{pnr}_{firstname}.pdf"
+
+        return send_file(pdf_path, as_attachment=True,
+                         download_name=filename, mimetype='application/pdf')
+
+    except json.JSONDecodeError as e:
+        return jsonify({'error': f'Invalid ticket data: {str(e)}'}), 422
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'model': 'llama-3.3-70b-versatile (groq)'})
