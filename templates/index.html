@@ -200,6 +200,10 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
     </div>
     <input type="file" id="fi-img" accept="image/png,image/jpeg,image/jpg" multiple onchange="addImages(this.files)">
     <div class="flist" id="imglist"></div>
+    <button class="btn primary" id="extract-btn" style="margin-top:12px;width:100%;justify-content:center;" onclick="extractFromImages()" disabled>
+      🔍 Auto-fill details from image(s)
+    </button>
+    <div id="extract-sbox" class="sbox"></div>
   </div>
 
   <!-- Step 2: Ticket details -->
@@ -440,6 +444,7 @@ function renderImages(){
       <span class="sz">${(f.size/1024).toFixed(0)} KB</span>
       <span class="rm" onclick="removeImage(${i})">✕</span>
     </div>`).join('');
+  document.getElementById('extract-btn').disabled = images.length===0;
 }
 const dzImg=document.getElementById('dz-img');
 dzImg.addEventListener('dragover',e=>{e.preventDefault();dzImg.classList.add('over');});
@@ -467,6 +472,98 @@ function removeImLogo(e){
   document.getElementById('im-logo-placeholder').style.display = 'flex';
   document.getElementById('im-logo-rm').style.display = 'none';
   document.getElementById('im-logo-zone').classList.remove('has-logo');
+}
+
+// ===================== IMAGE TAB: auto-fill via Groq vision =====================
+function extractStatus(msg, type){
+  const el = document.getElementById('extract-sbox');
+  el.className = 'sbox' + (type ? ' show ' + type : '');
+  el.innerHTML = msg;
+}
+
+async function extractFromImages(){
+  if(images.length===0) return;
+  const btn = document.getElementById('extract-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Reading images...';
+  extractStatus('⏳ Groq AI is reading your ticket image(s)...', 'info');
+
+  const fd = new FormData();
+  images.forEach(f => fd.append('images', f));
+
+  try{
+    const resp = await fetch('/extract-image', {method:'POST', body:fd});
+    if(!resp.ok){
+      const e = await resp.json();
+      throw new Error(e.error || 'Extraction failed');
+    }
+    const data = await resp.json();
+    populateFromExtracted(data);
+    extractStatus('✅ Details filled in below — please review before generating.', 'ok');
+  }catch(e){
+    extractStatus('❌ Error: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🔍 Auto-fill details from image(s)';
+}
+
+function populateFromExtracted(data){
+  // Basic ticket details
+  const pax = (data.passengers && data.passengers[0]) || {};
+  document.getElementById('im-pax').value = pax.passenger_name || '';
+  document.getElementById('im-ttl').value = pax.title || '';
+  document.getElementById('im-tkt').value = pax.ticket_number || '';
+  document.getElementById('im-pnr').value = data.booking_ref || '';
+  document.getElementById('im-air').value = data.airline_name || '';
+  document.getElementById('im-col').value = data.brand_hex || '';
+
+  // Rebuild flight rows from extracted pages
+  document.getElementById('flight-rows').innerHTML = '';
+  flightRowCount = 0;
+
+  const pages = data.pages || [];
+  pages.forEach(page => {
+    (page.flights || []).forEach(flight => {
+      addFlightRow();
+      const id = flightRowCount;
+      const set = (k, v) => { const el = document.getElementById(`fr-${k}-${id}`); if(el) el.value = v || ''; };
+
+      set('journey', page.page_label || '');
+      set('flightno', flight.flight_no);
+      set('cabin', flight.cabin || 'Economy');
+      set('depcode', flight.dep_code);
+      set('depcity', flight.dep_city);
+      set('depairport', flight.dep_airport);
+      set('depterm', flight.dep_terminal);
+      set('deptime', flight.dep_time);
+      set('depdate', flight.dep_date);
+      set('arrcode', flight.arr_code);
+      set('arrcity', flight.arr_city);
+      set('arrairport', flight.arr_airport);
+      set('arrterm', flight.arr_terminal);
+      set('arrtime', flight.arr_time);
+      set('arrdate', flight.arr_date);
+
+      if(flight.transit || flight.stopover){
+        document.getElementById('fr-extra-'+id).classList.add('show');
+        if(flight.transit){
+          set('transitport', flight.transit.airport);
+          set('transitdur', flight.transit.duration);
+          const bagEl = document.getElementById(`fr-transitbag-${id}`);
+          if(bagEl) bagEl.value = flight.transit.baggage_status || 'checked_through';
+        }
+        if(flight.stopover){
+          set('stopcode', flight.stopover.code);
+          set('stopcity', flight.stopover.city);
+          set('stopdur', flight.stopover.duration);
+        }
+      }
+    });
+  });
+
+  if(pages.length===0 || pages.every(p=>(p.flights||[]).length===0)){
+    addFlightRow(); // ensure at least one empty row remains
+  }
 }
 
 // ===================== IMAGE TAB: flight rows =====================
