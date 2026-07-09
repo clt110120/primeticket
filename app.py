@@ -1,4 +1,4 @@
-import os, json, re, tempfile, zipfile
+import os, json, re, tempfile, zipfile, base64
 from flask import Flask, request, jsonify, send_file, render_template
 from groq import Groq
 import fitz  # PyMuPDF
@@ -280,6 +280,31 @@ def extract_with_groq(pdf_bytes_list):
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        max_tokens=3000,
+    )
+
+    raw = response.choices[0].message.content.strip()
+    raw = re.sub(r'```json|```', '', raw).strip()
+    return json.loads(raw)
+
+
+def extract_with_groq_vision(image_bytes_list, image_exts):
+    """Extract flight data from ticket screenshots/images using Groq vision."""
+    client = Groq(api_key=GROQ_API_KEY)
+
+    content = [{"type": "text", "text": EXTRACT_PROMPT + "\n(The itinerary details are in the attached image(s) below — read all of them together as one booking.)"}]
+    for img_bytes, ext in zip(image_bytes_list, image_exts):
+        mime = 'image/png' if ext.lower() == 'png' else 'image/jpeg'
+        b64 = base64.b64encode(img_bytes).decode('utf-8')
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"}
+        })
+
+    response = client.chat.completions.create(
+        model="llama-3.2-90b-vision-preview",
+        messages=[{"role": "user", "content": content}],
         temperature=0.1,
         max_tokens=3000,
     )
@@ -1000,6 +1025,47 @@ def generate():
 
     except json.JSONDecodeError as e:
         return jsonify({'error': f'Could not parse flight data: {str(e)}'}), 422
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/extract-image', methods=['POST'])
+def extract_image():
+    """Extract flight/airline details from uploaded ticket screenshots via Groq vision."""
+    files = request.files.getlist('images')
+    if not files:
+        return jsonify({'error': 'No images uploaded'}), 400
+
+    try:
+        image_bytes_list = [f.read() for f in files]
+        image_exts        = [f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else 'jpg'
+                              for f in files]
+        data = extract_with_groq_vision(image_bytes_list, image_exts)
+
+        # Normalise passengers structure (support old single-pax shape too)
+        if 'passengers' not in data or not data['passengers']:
+            data['passengers'] = [{
+                'passenger_name': data.get('passenger_name', ''),
+                'title':          data.get('title', ''),
+                'ticket_number':  data.get('ticket_number', ''),
+            }]
+
+        data['airline_name'] = shorten_airline(data.get('airline_name', ''))
+
+        if data.get('all_refs') or data.get('booking_ref'):
+            data['booking_ref'] = pick_airline_ref(data) or data.get('booking_ref', '')
+
+        if not data.get('brand_hex') or data['brand_hex'] in ('#1A1A1A', '#000000', ''):
+            al = data.get('airline_name', '').lower()
+            for key, hx in AIRLINE_BRANDS.items():
+                if key in al:
+                    data['brand_hex'] = hx
+                    break
+
+        return jsonify(data)
+
+    except json.JSONDecodeError as e:
+        return jsonify({'error': f'Could not read flight data from image(s): {str(e)}'}), 422
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
