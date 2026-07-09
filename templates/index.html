@@ -56,7 +56,23 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
 .logo-upload:hover{border-color:#888;background:#f0efe9;}
 .logo-upload.has-logo{border-style:solid;border-color:#aaa;background:#fff;}
 .foot{text-align:center;font-size:11px;color:#ccc;margin-top:22px;}
-@media(max-width:480px){.grid{grid-template-columns:1fr;}}
+.tabs{display:flex;gap:6px;margin-bottom:14px;}
+.tab{flex:1;padding:10px 12px;font-size:13px;font-weight:500;border-radius:9px;border:0.5px solid rgba(0,0,0,0.12);background:#fff;color:#888;cursor:pointer;transition:all .12s;}
+.tab:hover{background:#f0efe9;}
+.tab.active{background:#111;color:#fff;border-color:#111;}
+.frow{border:0.5px solid rgba(0,0,0,0.12);border-radius:10px;padding:14px;margin-bottom:10px;background:#fafaf8;position:relative;}
+.frow-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+.frow-title{font-size:12px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.05em;}
+.frow-rm{cursor:pointer;color:#bbb;font-size:16px;padding:2px 6px;border-radius:4px;}
+.frow-rm:hover{color:#e74c3c;background:#fef0ee;}
+.frow .grid{margin-bottom:8px;}
+.frow .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px;}
+.frow label{font-size:11px;}
+.extra-toggle{font-size:12px;color:#666;cursor:pointer;display:inline-flex;align-items:center;gap:5px;margin-top:4px;user-select:none;}
+.extra-toggle:hover{color:#111;}
+.extra-fields{display:none;margin-top:10px;padding-top:10px;border-top:0.5px dashed #ddd;}
+.extra-fields.show{display:block;}
+@media(max-width:480px){.grid{grid-template-columns:1fr;} .frow .grid3{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
@@ -67,6 +83,13 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
   </div>
   <p class="hsub">Prime Lanka Tours &mdash; Puttalam</p>
 
+  <div class="tabs">
+    <button class="tab active" id="tab-pdf" onclick="switchTab('pdf')">📄 Extract from PDF</button>
+    <button class="tab" id="tab-img" onclick="switchTab('img')">🖼️ Image to PDF</button>
+  </div>
+
+  <!-- ============ PDF TAB ============ -->
+  <div id="panel-pdf">
   <!-- Step 1 -->
   <div class="card">
     <p class="step">Step 1 — Upload itinerary PDF</p>
@@ -161,6 +184,114 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
       </button>
     </div>
   </div>
+  </div>
+  <!-- ============ END PDF TAB ============ -->
+
+  <!-- ============ IMAGE TAB ============ -->
+  <div id="panel-img" style="display:none;">
+
+  <!-- Step 1 -->
+  <div class="card">
+    <p class="step">Step 1 — Upload ticket image(s) <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional — for your reference)</span></p>
+    <div class="dz" id="dz-img" onclick="document.getElementById('fi-img').click()">
+      <div class="dz-icon">🖼️</div>
+      <p>Click or drag &amp; drop screenshot(s) here</p>
+      <small>Airline app screenshots, booking confirmation images — one-way, return, or multiple</small>
+    </div>
+    <input type="file" id="fi-img" accept="image/png,image/jpeg,image/jpg" multiple onchange="addImages(this.files)">
+    <div class="flist" id="imglist"></div>
+  </div>
+
+  <!-- Step 2: Ticket details -->
+  <div class="card">
+    <p class="step">Step 2 — Ticket details</p>
+    <div class="grid">
+      <div><label>Passenger name</label><input type="text" id="im-pax" placeholder="e.g. JAYALATH GAMAGE WEERASINGHE"></div>
+      <div><label>Title</label>
+        <select id="im-ttl"><option value="">None</option>
+          <option>MR</option><option>MRS</option><option>MS</option><option>DR</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid">
+      <div><label>Ticket number</label><input type="text" id="im-tkt" placeholder="e.g. 157-7482016756"></div>
+      <div><label>Booking reference (PNR)</label><input type="text" id="im-pnr" placeholder="e.g. AE3GI2"></div>
+    </div>
+    <div class="grid">
+      <div><label>Airline name</label><input type="text" id="im-air" placeholder="e.g. Qatar Airways"></div>
+      <div><label>Brand colour</label>
+        <div class="crow">
+          <input type="text" id="im-col" placeholder="e.g. #5C0632">
+          <input type="color" id="im-cpick" value="#111111"
+            oninput="document.getElementById('im-col').value=this.value">
+        </div>
+      </div>
+    </div>
+    <div class="grid one">
+      <div>
+        <label>Airline logo <span style="font-weight:400;color:#bbb;">(optional — PNG or JPG)</span></label>
+        <div class="logo-upload" id="im-logo-zone" onclick="document.getElementById('im-logo').click()">
+          <div id="im-logo-preview-wrap" style="display:none;">
+            <img id="im-logo-preview" src="" alt="logo preview"
+              style="max-height:48px;max-width:160px;object-fit:contain;display:block;margin:0 auto;">
+          </div>
+          <div id="im-logo-placeholder">
+            <span style="font-size:22px;">🖼️</span>
+            <span style="font-size:13px;color:#888;margin-left:8px;">Click to upload logo</span>
+          </div>
+          <span id="im-logo-rm" onclick="removeImLogo(event)"
+            style="display:none;position:absolute;top:6px;right:8px;cursor:pointer;color:#aaa;font-size:16px;">✕</span>
+        </div>
+        <input type="file" id="im-logo" accept="image/png,image/jpeg,image/jpg"
+          onchange="handleImLogo(this.files[0])">
+      </div>
+    </div>
+    <div class="grid">
+      <div><label>Carry-on baggage</label><input type="text" id="im-carryon" placeholder="e.g. 7 kg"></div>
+      <div><label>Checked baggage</label><input type="text" id="im-checked" placeholder="e.g. 30 kg or 2 Pieces"></div>
+    </div>
+    <div class="grid">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;font-size:13px;color:#333;">
+          <input type="checkbox" id="im-meal" style="width:16px;height:16px;cursor:pointer;accent-color:#1a1a1a;">
+          Meal included
+        </label>
+      </div>
+      <div><label>Ticket policy notice</label>
+        <select id="im-policy">
+          <option value="">None</option>
+          <option value="non_refundable">Non-Refundable</option>
+          <option value="change_24h">Changes allowed up to 24 hours before departure</option>
+          <option value="change_48h">Changes allowed up to 48 hours before departure</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Flights -->
+  <div class="card">
+    <p class="step">Step 3 — Flight details</p>
+    <p class="tip">Add one row per flight. Use the journey dropdown to group flights into Outbound / Return for round trips.</p>
+    <div id="flight-rows"></div>
+    <button class="btn" style="margin-top:8px;" onclick="addFlightRow()">+ Add flight</button>
+  </div>
+
+  <!-- Step 4 -->
+  <div class="card">
+    <p class="step">Step 4 — Generate PDF</p>
+    <div id="im-sbox" class="sbox"></div>
+    <div id="im-prog" class="prog"><div id="im-bar" class="bar"></div></div>
+    <div class="divider"></div>
+    <div class="brow">
+      <button class="btn" onclick="clearImgAll()">🗑 Clear</button>
+      <button class="btn primary" id="im-btn" onclick="runManual()">
+        ✨ Generate PDF
+      </button>
+    </div>
+  </div>
+  </div>
+  <!-- ============ END IMAGE TAB ============ -->
+
 
   <p class="foot">Powered by Groq AI (Llama 3.3) &nbsp;·&nbsp; Prime Lanka Tours &copy; 2026</p>
 </div>
@@ -284,6 +415,271 @@ const dz=document.getElementById('dz');
 dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over');});
 dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
 dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');addFiles(e.dataTransfer.files);});
+
+// ===================== TAB SWITCHING =====================
+function switchTab(name){
+  document.getElementById('tab-pdf').classList.toggle('active', name==='pdf');
+  document.getElementById('tab-img').classList.toggle('active', name==='img');
+  document.getElementById('panel-pdf').style.display = name==='pdf' ? '' : 'none';
+  document.getElementById('panel-img').style.display = name==='img' ? '' : 'none';
+}
+
+// ===================== IMAGE TAB: image upload (reference only) =====================
+let images = [];
+function addImages(fl){
+  for(const f of fl)
+    if(f.type.startsWith('image/') && !images.find(x=>x.name===f.name)) images.push(f);
+  renderImages();
+}
+function removeImage(i){ images.splice(i,1); renderImages(); }
+function renderImages(){
+  document.getElementById('imglist').innerHTML = images.map((f,i)=>`
+    <div class="fi">
+      <span>🖼️</span>
+      <span class="name">${f.name}</span>
+      <span class="sz">${(f.size/1024).toFixed(0)} KB</span>
+      <span class="rm" onclick="removeImage(${i})">✕</span>
+    </div>`).join('');
+}
+const dzImg=document.getElementById('dz-img');
+dzImg.addEventListener('dragover',e=>{e.preventDefault();dzImg.classList.add('over');});
+dzImg.addEventListener('dragleave',()=>dzImg.classList.remove('over'));
+dzImg.addEventListener('drop',e=>{e.preventDefault();dzImg.classList.remove('over');addImages(e.dataTransfer.files);});
+
+// ===================== IMAGE TAB: logo upload =====================
+let imLogoFile = null;
+function handleImLogo(f){
+  if(!f) return;
+  imLogoFile = f;
+  const url = URL.createObjectURL(f);
+  document.getElementById('im-logo-preview').src = url;
+  document.getElementById('im-logo-preview-wrap').style.display = 'block';
+  document.getElementById('im-logo-placeholder').style.display = 'none';
+  document.getElementById('im-logo-rm').style.display = 'block';
+  document.getElementById('im-logo-zone').classList.add('has-logo');
+}
+function removeImLogo(e){
+  if(e) e.stopPropagation();
+  imLogoFile = null;
+  document.getElementById('im-logo').value = '';
+  document.getElementById('im-logo-preview').src = '';
+  document.getElementById('im-logo-preview-wrap').style.display = 'none';
+  document.getElementById('im-logo-placeholder').style.display = 'flex';
+  document.getElementById('im-logo-rm').style.display = 'none';
+  document.getElementById('im-logo-zone').classList.remove('has-logo');
+}
+
+// ===================== IMAGE TAB: flight rows =====================
+let flightRowCount = 0;
+function addFlightRow(){
+  flightRowCount++;
+  const id = flightRowCount;
+  const div = document.createElement('div');
+  div.className = 'frow';
+  div.id = 'frow-'+id;
+  div.innerHTML = `
+    <div class="frow-hd">
+      <span class="frow-title">Flight ${id}</span>
+      <span class="frow-rm" onclick="removeFlightRow(${id})">✕</span>
+    </div>
+    <div class="grid3">
+      <div><label>Journey</label>
+        <select id="fr-journey-${id}">
+          <option value="">One-way</option>
+          <option value="Outbound Journey">Outbound</option>
+          <option value="Return Journey">Return</option>
+        </select>
+      </div>
+      <div><label>Flight number</label><input type="text" id="fr-flightno-${id}" placeholder="e.g. QR 222"></div>
+      <div><label>Cabin class</label><input type="text" id="fr-cabin-${id}" placeholder="Economy" value="Economy"></div>
+    </div>
+    <div class="grid3">
+      <div><label>Dep. airport code</label><input type="text" id="fr-depcode-${id}" placeholder="CMB"></div>
+      <div><label>Dep. city</label><input type="text" id="fr-depcity-${id}" placeholder="Colombo"></div>
+      <div><label>Dep. airport name</label><input type="text" id="fr-depairport-${id}" placeholder="Bandaranaike Intl Arpt"></div>
+    </div>
+    <div class="grid3">
+      <div><label>Dep. time (24h)</label><input type="text" id="fr-deptime-${id}" placeholder="10:00"></div>
+      <div><label>Dep. date</label><input type="text" id="fr-depdate-${id}" placeholder="24 Jun 2026"></div>
+      <div><label>Dep. terminal</label><input type="text" id="fr-depterm-${id}" placeholder="e.g. T1 (optional)"></div>
+    </div>
+    <div class="grid3">
+      <div><label>Arr. airport code</label><input type="text" id="fr-arrcode-${id}" placeholder="DOH"></div>
+      <div><label>Arr. city</label><input type="text" id="fr-arrcity-${id}" placeholder="Doha"></div>
+      <div><label>Arr. airport name</label><input type="text" id="fr-arrairport-${id}" placeholder="Hamad Intl Arpt"></div>
+    </div>
+    <div class="grid3">
+      <div><label>Arr. time (24h)</label><input type="text" id="fr-arrtime-${id}" placeholder="13:30"></div>
+      <div><label>Arr. date</label><input type="text" id="fr-arrdate-${id}" placeholder="24 Jun 2026"></div>
+      <div><label>Arr. terminal</label><input type="text" id="fr-arrterm-${id}" placeholder="e.g. T1 (optional)"></div>
+    </div>
+    <span class="extra-toggle" onclick="toggleExtra(${id})">⚙️ Transit / Technical stop (optional)</span>
+    <div class="extra-fields" id="fr-extra-${id}">
+      <p class="tip" style="margin-bottom:8px;">Transit = layover before the NEXT flight. Technical stop = brief stop within THIS flight.</p>
+      <div class="grid3">
+        <div><label>Transit airport</label><input type="text" id="fr-transitport-${id}" placeholder="e.g. Hamad Intl Arpt"></div>
+        <div><label>Transit duration</label><input type="text" id="fr-transitdur-${id}" placeholder="e.g. 3hr 55mins"></div>
+        <div><label>Baggage</label>
+          <select id="fr-transitbag-${id}">
+            <option value="checked_through">Checked through</option>
+            <option value="reclaim">Reclaim &amp; re-check</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid3">
+        <div><label>Stop code</label><input type="text" id="fr-stopcode-${id}" placeholder="e.g. MLE"></div>
+        <div><label>Stop city</label><input type="text" id="fr-stopcity-${id}" placeholder="e.g. Male"></div>
+        <div><label>Stop duration</label><input type="text" id="fr-stopdur-${id}" placeholder="e.g. 1hr"></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('flight-rows').appendChild(div);
+}
+function removeFlightRow(id){
+  const el = document.getElementById('frow-'+id);
+  if(el) el.remove();
+}
+function toggleExtra(id){
+  document.getElementById('fr-extra-'+id).classList.toggle('show');
+}
+
+function collectFlightRows(){
+  const rows = document.querySelectorAll('#flight-rows .frow');
+  const journeyMap = {};   // page_label -> [flights]
+  const journeyOrder = [];
+  rows.forEach(row=>{
+    const id = row.id.split('-')[1];
+    const g = k => document.getElementById(`fr-${k}-${id}`).value.trim();
+    const journey = g('journey');
+    const flight = {
+      flight_no: g('flightno'),
+      operated_by: document.getElementById('im-air').value.trim(),
+      cabin: g('cabin') || 'Economy',
+      dep_code: g('depcode').toUpperCase(),
+      dep_city: g('depcity'),
+      dep_airport: g('depairport'),
+      dep_terminal: g('depterm'),
+      dep_time: g('deptime'),
+      dep_date: g('depdate'),
+      arr_code: g('arrcode').toUpperCase(),
+      arr_city: g('arrcity'),
+      arr_airport: g('arrairport'),
+      arr_terminal: g('arrterm'),
+      arr_time: g('arrtime'),
+      arr_date: g('arrdate'),
+      carryon: document.getElementById('im-carryon').value.trim() || '7 kg',
+      checked: document.getElementById('im-checked').value.trim() || '-',
+      status: 'CONFIRMED',
+      fare_type: '-',
+      seat: '-',
+      aircraft: '',
+      transit: null,
+      stopover: null,
+    };
+    const transitPort = g('transitport'), transitDur = g('transitdur');
+    if(transitPort || transitDur){
+      flight.transit = {
+        airport: transitPort, duration: transitDur,
+        baggage_status: document.getElementById(`fr-transitbag-${id}`).value
+      };
+    }
+    const stopCode = g('stopcode'), stopDur = g('stopdur');
+    if(stopCode || stopDur){
+      flight.stopover = { code: stopCode.toUpperCase(), city: g('stopcity'), duration: stopDur };
+    }
+    if(!journeyMap[journey]){ journeyMap[journey]=[]; journeyOrder.push(journey); }
+    journeyMap[journey].push(flight);
+  });
+  return journeyOrder.map(j => ({ page_label: j, flights: journeyMap[j] }));
+}
+
+function clearImgAll(){
+  images=[];
+  renderImages();
+  removeImLogo();
+  ['im-pax','im-tkt','im-pnr','im-air','im-col','im-carryon','im-checked'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('im-ttl').value='';
+  document.getElementById('im-meal').checked=false;
+  document.getElementById('im-policy').value='';
+  document.getElementById('flight-rows').innerHTML='';
+  flightRowCount=0;
+  imStatus('',''); imProgress(0);
+}
+function imStatus(msg,type){
+  const el=document.getElementById('im-sbox');
+  el.className='sbox'+(type?' show '+type:'');
+  el.innerHTML=msg;
+}
+function imProgress(pct){
+  const w=document.getElementById('im-prog'),b=document.getElementById('im-bar');
+  w.className='prog'+(pct>0?' show':'');
+  b.style.width=pct+'%';
+}
+
+async function runManual(){
+  const pages = collectFlightRows();
+  if(pages.length===0 || pages.every(p=>p.flights.length===0)){
+    imStatus('❌ Add at least one flight before generating.','err');
+    return;
+  }
+  if(!document.getElementById('im-pax').value.trim()){
+    imStatus('❌ Passenger name is required.','err');
+    return;
+  }
+
+  const btn=document.getElementById('im-btn');
+  btn.disabled=true;
+  btn.innerHTML='<span class="spin"></span> Generating...';
+  imProgress(30);
+  imStatus('⏳ Building your e-ticket PDF...','info');
+
+  const payload = {
+    passenger_name: document.getElementById('im-pax').value.trim(),
+    title: document.getElementById('im-ttl').value,
+    ticket_number: document.getElementById('im-tkt').value.trim(),
+    booking_ref: document.getElementById('im-pnr').value.trim(),
+    airline_name: document.getElementById('im-air').value.trim(),
+    brand_hex: document.getElementById('im-col').value.trim(),
+    checked_baggage: document.getElementById('im-checked').value.trim(),
+    meal_included: document.getElementById('im-meal').checked,
+    ticket_policy: document.getElementById('im-policy').value,
+    pages: pages,
+  };
+
+  const fd = new FormData();
+  fd.append('data', JSON.stringify(payload));
+  if(imLogoFile) fd.append('logo', imLogoFile);
+
+  try{
+    imProgress(60);
+    const resp = await fetch('/generate-manual', {method:'POST', body:fd});
+    imProgress(85);
+    if(!resp.ok){
+      const e = await resp.json();
+      throw new Error(e.error || 'Server error');
+    }
+    const blob = await resp.blob();
+    const cd = resp.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    const name = m ? m[1] : 'eticket.pdf';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+    imProgress(100);
+    imStatus('✅ PDF downloaded! Check your downloads folder.','ok');
+    setTimeout(()=>imProgress(0),2000);
+  }catch(e){
+    imStatus('❌ Error: '+e.message,'err');
+    imProgress(0);
+  }
+  btn.disabled=false;
+  btn.innerHTML='✨ Generate PDF';
+}
+
+// Start with one flight row visible
+addFlightRow();
+
 </script>
 </body>
 </html>
