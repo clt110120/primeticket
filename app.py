@@ -263,6 +263,34 @@ def extract_pdf_text(pdf_bytes):
     return text.strip()
 
 
+def _parse_groq_json(raw_content, context=""):
+    """Robustly parse JSON out of a Groq model response, tolerating
+    markdown fences, leading/trailing prose, or empty responses."""
+    if not raw_content or not raw_content.strip():
+        raise ValueError(f"Model returned an empty response{(' for ' + context) if context else ''}. "
+                          f"Please try again, or try with clearer/higher-resolution image(s).")
+
+    raw = raw_content.strip()
+    raw = re.sub(r'```json|```', '', raw).strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: extract the first {...} block (handles stray prose before/after)
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not parse the model's response as JSON{(' for ' + context) if context else ''}. "
+                      f"Raw response started with: {raw[:200]!r}")
+
+
 def extract_with_groq(pdf_bytes_list):
     """Extract flight data from PDF text using Groq."""
     client = Groq(api_key=GROQ_API_KEY)
@@ -282,18 +310,21 @@ def extract_with_groq(pdf_bytes_list):
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
         max_tokens=3000,
+        response_format={"type": "json_object"},
     )
 
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r'```json|```', '', raw).strip()
-    return json.loads(raw)
+    raw = response.choices[0].message.content
+    return _parse_groq_json(raw, context="the uploaded PDF(s)")
 
 
 def extract_with_groq_vision(image_bytes_list, image_exts):
     """Extract flight data from ticket screenshots/images using Groq vision."""
     client = Groq(api_key=GROQ_API_KEY)
 
-    content = [{"type": "text", "text": EXTRACT_PROMPT + "\n(The itinerary details are in the attached image(s) below — read all of them together as one booking.)"}]
+    content = [{"type": "text", "text": EXTRACT_PROMPT +
+                "\n(The itinerary details are in the attached image(s) below — read all of them "
+                "together as one booking. Respond with ONLY the JSON object — no prose, no "
+                "markdown fences, nothing before or after the JSON.)"}]
     for img_bytes, ext in zip(image_bytes_list, image_exts):
         mime = 'image/png' if ext.lower() == 'png' else 'image/jpeg'
         b64 = base64.b64encode(img_bytes).decode('utf-8')
@@ -307,11 +338,11 @@ def extract_with_groq_vision(image_bytes_list, image_exts):
         messages=[{"role": "user", "content": content}],
         temperature=0.1,
         max_tokens=3000,
+        response_format={"type": "json_object"},
     )
 
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r'```json|```', '', raw).strip()
-    return json.loads(raw)
+    raw = response.choices[0].message.content
+    return _parse_groq_json(raw, context="the uploaded image(s)")
 
 
 def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
@@ -1023,7 +1054,7 @@ def generate():
         return send_file(zip_tmp.name, as_attachment=True,
                          download_name=zip_filename, mimetype='application/zip')
 
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, ValueError) as e:
         return jsonify({'error': f'Could not parse flight data: {str(e)}'}), 422
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1064,7 +1095,7 @@ def extract_image():
 
         return jsonify(data)
 
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, ValueError) as e:
         return jsonify({'error': f'Could not read flight data from image(s): {str(e)}'}), 422
     except Exception as e:
         return jsonify({'error': str(e)}), 500
