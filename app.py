@@ -133,24 +133,95 @@ Use this exact structure:
   ]
 }
 
-Rules:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+JOURNEY GROUPING — how to decide what goes on which "page"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+A "page" = ONE DIRECTION of travel, which may contain ONE OR MORE flights
+(connecting flights toward the same final destination).
+
+- Trace the route in order. As long as each flight's departure city matches
+  the PREVIOUS flight's arrival city, and the journey keeps moving TOWARD
+  the final destination, these flights belong on the SAME page together
+  (linked via "transit" — see below). This is true even if there are 2, 3,
+  or more connecting flights in one direction.
+- Start a NEW page ("Return Journey") ONLY when the route reverses and
+  starts heading back toward the original departure city — this is a
+  genuine round trip.
+- One-way trip (single direction, however many connecting flights) → ONE
+  page, page_label = "" (empty string).
+- Round trip (there and back) → TWO pages: page_label "Outbound Journey"
+  for all flights heading out, "Return Journey" for all flights heading back.
+- Never put each connecting flight on its own separate page. Only direction
+  reversal creates a new page.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TRANSIT vs STOPOVER — read carefully, both are commonly present
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TRANSIT = a layover BETWEEN two separate flights (different flight numbers)
+at the same connecting airport, within the SAME page/direction. Look for
+words/labels like: "Transfer", "Layover", "Connecting flight", "Change of
+aircraft", "Wait time", or simply: flight A arrives at airport X, and later
+flight B departs from that SAME airport X. Set "transit" on the FIRST
+flight (flight A):
+  {"airport": "Airport short name of X", "duration": "Xhr Ymins",
+   "baggage_status": "checked_through" or "reclaim"}
+- duration = gap between flight A's arrival time and flight B's departure time.
+- baggage_status = "checked_through" unless the document explicitly says
+  baggage must be reclaimed/re-checked at that stop.
+
+STOPOVER = a brief TECHNICAL stop WITHIN a single flight (SAME flight
+number before and after the stop — the aircraft stops briefly, e.g. to
+refuel or change some passengers, then continues under the SAME flight
+number). Look for words like "Stop:", "Technical stop", "via", or a single
+flight number listed with two intermediate airports. Set "stopover" on
+that flight:
+  {"code": "IATA code e.g. MLE", "city": "City name",
+   "airport": "Airport short name", "duration": "Xhr"}
+
+A single flight can have BOTH: a stopover mid-flight, AND a transit
+after it lands (before the next connecting flight). Check every flight
+for both possibilities independently — do not assume only one exists
+per document.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WORKED EXAMPLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Document shows: CMB→DOH (GF145, stop at Male 1hr), then a 3hr15min transfer
+at Doha, then DOH→JED (GF181); then later, a return: JED→DOH (GF182),
+2hr transfer at Doha, DOH→CMB (GF146).
+This is a ROUND TRIP with a connecting flight in EACH direction:
+{
+  "pages": [
+    {"page_label": "Outbound Journey", "flights": [
+      {"flight_no":"GF145", ..., "dep_code":"CMB", "arr_code":"DOH",
+       "stopover": {"code":"MLE","city":"Male","airport":"Velana Intl Arpt","duration":"1hr"},
+       "transit": {"airport":"Hamad Intl Arpt","duration":"3hr 15mins","baggage_status":"checked_through"}},
+      {"flight_no":"GF181", ..., "dep_code":"DOH", "arr_code":"JED", "transit": null, "stopover": null}
+    ]},
+    {"page_label": "Return Journey", "flights": [
+      {"flight_no":"GF182", ..., "dep_code":"JED", "arr_code":"DOH",
+       "transit": {"airport":"Hamad Intl Arpt","duration":"2hr","baggage_status":"checked_through"}},
+      {"flight_no":"GF146", ..., "dep_code":"DOH", "arr_code":"CMB", "transit": null, "stopover": null}
+    ]}
+  ]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OTHER RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Always put passengers in the "passengers" array, even if there is only one passenger
 - Each passenger has their own name, title, and ticket number
 - All passengers share the same flights (pages), booking_ref, and airline info
 - Extract ALL reference numbers found in the document into "all_refs" list (airline ref, agency ref, booking number, PNR, etc.)
 - For "booking_ref" pick the airline's own reference (not agency/trip.com/booking.com ref)
-- If there is a layover/transfer BETWEEN two flights, set transit on the FIRST flight:
-  {"airport": "Airport short name", "duration": "Xhr Ymins", "baggage_status": "checked_through or reclaim"}
-- If there is a technical stop/intermediate stop WITHIN a flight (same flight number, brief stop), set stopover:
-  {"code": "IATA code e.g. MLE", "city": "City name", "airport": "Airport short name", "duration": "Xhr"}
-- A flight can have BOTH a stopover (within the flight) AND a transit (after landing, before next flight)
-- For round trips: use TWO pages — "Outbound Journey" and "Return Journey"
-- For one-way: use ONE page with page_label as empty string
 - brand_hex: Thai Airways=#7B0D1E, SriLankan Airlines=#A6192E, Qatar Airways=#5C0632,
   Gulf Air=#C8922A, Etihad Airways=#BD8B13, Emirates=#CC0000, Singapore Airlines=#003B6F,
   Lufthansa=#05164D, British Airways=#075AAA, Air India=#E31837, default=#1A1A1A
 - Keep airport names short (max 30 chars)
 - All times in 24hr HH:MM format
+- Before finalizing, double check: (1) did you check EVERY flight for both transit
+  and stopover, not just the first one? (2) did you only create a new page when
+  the direction actually reverses, not for every connecting flight?
 
 ITINERARY TEXT:
 """
@@ -309,7 +380,7 @@ def extract_with_groq(pdf_bytes_list):
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        max_tokens=3000,
+        max_tokens=4000,
         response_format={"type": "json_object"},
     )
 
@@ -337,7 +408,7 @@ def extract_with_groq_vision(image_bytes_list, image_exts):
         model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": content}],
         temperature=0.1,
-        max_tokens=3000,
+        max_tokens=4000,
         response_format={"type": "json_object"},
     )
 
