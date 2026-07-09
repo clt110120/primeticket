@@ -82,146 +82,56 @@ def draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP, GREY_MID_COLOR):
         return H - T - 18*mm
 
 
-EXTRACT_PROMPT = """You are a flight data extractor. Extract all flight booking details from the text below and return ONLY a raw JSON object. No markdown, no code fences, no explanation — just the JSON.
+EXTRACT_PROMPT = """You are a flight data extractor. Return ONLY a raw JSON object — no markdown, no prose.
 
-Use this exact structure:
+Structure:
 {
-  "passengers": [
-    {
-      "passenger_name": "FULL NAME IN CAPS",
-      "title": "MR or MRS or MS or DR or empty string",
-      "ticket_number": "ticket number as string"
-    }
-  ],
-  "booking_ref": "PNR / airline booking reference",
-  "all_refs": [
-    {"label": "Airline Booking Reference or Agency Ref or PNR etc", "value": "XXXXXX"}
-  ],
+  "passengers": [{"passenger_name": "FULL NAME CAPS", "title": "MR/MRS/MS/DR/empty", "ticket_number": "string"}],
+  "booking_ref": "airline's own PNR (not agency/trip.com ref)",
+  "all_refs": [{"label": "e.g. Airline Ref, Agency Ref, PNR", "value": "XXXXXX"}],
   "airline_name": "Full airline name",
   "brand_hex": "#hexcolor",
   "pages": [
-    {
-      "page_label": "Outbound Journey or Return Journey or empty string",
-      "flights": [
-        {
-          "flight_no": "XX 123",
-          "operated_by": "Airline name",
-          "dep_code": "AAA",
-          "dep_city": "City name",
-          "dep_airport": "Airport name short",
-          "dep_terminal": "Terminal X or empty string",
-          "dep_time": "HH:MM",
-          "dep_date": "DD Mon YYYY",
-          "arr_code": "BBB",
-          "arr_city": "City name",
-          "arr_airport": "Airport name short",
-          "arr_terminal": "Terminal X or empty string",
-          "arr_time": "HH:MM",
-          "arr_date": "DD Mon YYYY",
-          "cabin": "Economy or Business or First",
-          "carryon": "X kg or X Piece or -",
-          "checked": "X kg or X Piece or -",
-          "aircraft": "",
-          "status": "CONFIRMED",
-          "fare_type": "-",
-          "seat": "-",
-          "transit": null,
-          "stopover": null
-        }
-      ]
-    }
+    {"page_label": "Outbound Journey / Return Journey / empty string",
+     "flights": [
+       {"flight_no":"XX 123","operated_by":"Airline","dep_code":"AAA","dep_city":"City","dep_airport":"Short name",
+        "dep_terminal":"","dep_time":"HH:MM","dep_date":"DD Mon YYYY","arr_code":"BBB","arr_city":"City",
+        "arr_airport":"Short name","arr_terminal":"","arr_time":"HH:MM","arr_date":"DD Mon YYYY",
+        "cabin":"Economy/Business/First","carryon":"X kg or -","checked":"X kg or -","aircraft":"",
+        "status":"CONFIRMED","fare_type":"-","seat":"-","transit":null,"stopover":null}
+     ]}
   ]
 }
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-JOURNEY GROUPING — how to decide what goes on which "page"
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-A "page" = ONE DIRECTION of travel, which may contain ONE OR MORE flights
-(connecting flights toward the same final destination).
+PAGES: one page = one DIRECTION of travel (can hold several connecting flights toward the
+same final destination). Only start a NEW page when the route REVERSES back toward the
+origin (a true round trip). One-way = 1 page (page_label=""). Round trip = 2 pages
+("Outbound Journey", "Return Journey"). Never split connecting flights of the SAME
+direction onto separate pages.
 
-- Trace the route in order. As long as each flight's departure city matches
-  the PREVIOUS flight's arrival city, and the journey keeps moving TOWARD
-  the final destination, these flights belong on the SAME page together
-  (linked via "transit" — see below). This is true even if there are 2, 3,
-  or more connecting flights in one direction.
-- Start a NEW page ("Return Journey") ONLY when the route reverses and
-  starts heading back toward the original departure city — this is a
-  genuine round trip.
-- One-way trip (single direction, however many connecting flights) → ONE
-  page, page_label = "" (empty string).
-- Round trip (there and back) → TWO pages: page_label "Outbound Journey"
-  for all flights heading out, "Return Journey" for all flights heading back.
-- Never put each connecting flight on its own separate page. Only direction
-  reversal creates a new page.
+TRANSIT = layover BETWEEN two different flight numbers at the same airport (keywords:
+Transfer, Layover, Connecting). Set on the FIRST of the two flights:
+  "transit": {"airport":"name","duration":"Xhr Ymins","baggage_status":"checked_through" or "reclaim"}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TRANSIT vs STOPOVER — read carefully, both are commonly present
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TRANSIT = a layover BETWEEN two separate flights (different flight numbers)
-at the same connecting airport, within the SAME page/direction. Look for
-words/labels like: "Transfer", "Layover", "Connecting flight", "Change of
-aircraft", "Wait time", or simply: flight A arrives at airport X, and later
-flight B departs from that SAME airport X. Set "transit" on the FIRST
-flight (flight A):
-  {"airport": "Airport short name of X", "duration": "Xhr Ymins",
-   "baggage_status": "checked_through" or "reclaim"}
-- duration = gap between flight A's arrival time and flight B's departure time.
-- baggage_status = "checked_through" unless the document explicitly says
-  baggage must be reclaimed/re-checked at that stop.
+STOPOVER = brief technical stop WITHIN one flight (SAME flight number continues after,
+keywords: Stop, Technical stop, via):
+  "stopover": {"code":"IATA","city":"City","airport":"name","duration":"Xhr"}
 
-STOPOVER = a brief TECHNICAL stop WITHIN a single flight (SAME flight
-number before and after the stop — the aircraft stops briefly, e.g. to
-refuel or change some passengers, then continues under the SAME flight
-number). Look for words like "Stop:", "Technical stop", "via", or a single
-flight number listed with two intermediate airports. Set "stopover" on
-that flight:
-  {"code": "IATA code e.g. MLE", "city": "City name",
-   "airport": "Airport short name", "duration": "Xhr"}
+A flight can have both. Check every flight for each independently.
 
-A single flight can have BOTH: a stopover mid-flight, AND a transit
-after it lands (before the next connecting flight). Check every flight
-for both possibilities independently — do not assume only one exists
-per document.
+Example — CMB→DOH(GF145,stop at MLE 1hr)→[3h15m transfer]→DOH→JED(GF181), return
+JED→DOH(GF182)→[2h transfer]→DOH→CMB(GF146):
+pages=[{"page_label":"Outbound Journey","flights":[
+  {"flight_no":"GF145","dep_code":"CMB","arr_code":"DOH","stopover":{"code":"MLE","city":"Male","airport":"Velana Intl Arpt","duration":"1hr"},"transit":{"airport":"Hamad Intl Arpt","duration":"3hr 15mins","baggage_status":"checked_through"}},
+  {"flight_no":"GF181","dep_code":"DOH","arr_code":"JED"}]},
+ {"page_label":"Return Journey","flights":[
+  {"flight_no":"GF182","dep_code":"JED","arr_code":"DOH","transit":{"airport":"Hamad Intl Arpt","duration":"2hr","baggage_status":"checked_through"}},
+  {"flight_no":"GF146","dep_code":"DOH","arr_code":"CMB"}]}]
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WORKED EXAMPLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Document shows: CMB→DOH (GF145, stop at Male 1hr), then a 3hr15min transfer
-at Doha, then DOH→JED (GF181); then later, a return: JED→DOH (GF182),
-2hr transfer at Doha, DOH→CMB (GF146).
-This is a ROUND TRIP with a connecting flight in EACH direction:
-{
-  "pages": [
-    {"page_label": "Outbound Journey", "flights": [
-      {"flight_no":"GF145", ..., "dep_code":"CMB", "arr_code":"DOH",
-       "stopover": {"code":"MLE","city":"Male","airport":"Velana Intl Arpt","duration":"1hr"},
-       "transit": {"airport":"Hamad Intl Arpt","duration":"3hr 15mins","baggage_status":"checked_through"}},
-      {"flight_no":"GF181", ..., "dep_code":"DOH", "arr_code":"JED", "transit": null, "stopover": null}
-    ]},
-    {"page_label": "Return Journey", "flights": [
-      {"flight_no":"GF182", ..., "dep_code":"JED", "arr_code":"DOH",
-       "transit": {"airport":"Hamad Intl Arpt","duration":"2hr","baggage_status":"checked_through"}},
-      {"flight_no":"GF146", ..., "dep_code":"DOH", "arr_code":"CMB", "transit": null, "stopover": null}
-    ]}
-  ]
-}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OTHER RULES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Always put passengers in the "passengers" array, even if there is only one passenger
-- Each passenger has their own name, title, and ticket number
-- All passengers share the same flights (pages), booking_ref, and airline info
-- Extract ALL reference numbers found in the document into "all_refs" list (airline ref, agency ref, booking number, PNR, etc.)
-- For "booking_ref" pick the airline's own reference (not agency/trip.com/booking.com ref)
-- brand_hex: Thai Airways=#7B0D1E, SriLankan Airlines=#A6192E, Qatar Airways=#5C0632,
-  Gulf Air=#C8922A, Etihad Airways=#BD8B13, Emirates=#CC0000, Singapore Airlines=#003B6F,
-  Lufthansa=#05164D, British Airways=#075AAA, Air India=#E31837, default=#1A1A1A
-- Keep airport names short (max 30 chars)
-- All times in 24hr HH:MM format
-- Before finalizing, double check: (1) did you check EVERY flight for both transit
-  and stopover, not just the first one? (2) did you only create a new page when
-  the direction actually reverses, not for every connecting flight?
+Other rules: brand_hex — Thai Airways=#7B0D1E, SriLankan=#A6192E, Qatar=#5C0632, Gulf Air=#C8922A,
+Etihad=#BD8B13, Emirates=#CC0000, Singapore=#003B6F, Lufthansa=#05164D, British Airways=#075AAA,
+Air India=#E31837, default=#1A1A1A. Airport names max 30 chars. Times in 24hr HH:MM.
+Always use the "passengers" array even for one passenger.
 
 ITINERARY TEXT:
 """
@@ -342,9 +252,11 @@ def _parse_groq_json(raw_content, context=""):
                           f"Please try again, or try with clearer/higher-resolution image(s).")
 
     raw = raw_content.strip()
-    raw = re.sub(r'```json|```', '', raw).strip()
+    # Anchored fence-stripping (only at start/end) — safer than a global
+    # substitution which could corrupt legitimate ``` content mid-string.
+    raw = re.sub(r'^```(json)?', '', raw).strip()
+    raw = re.sub(r'```$', '', raw).strip()
 
-    # Try direct parse first
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -377,15 +289,36 @@ def extract_with_groq(pdf_bytes_list):
     prompt = EXTRACT_PROMPT + combined_text
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        max_tokens=4000,
+        max_completion_tokens=4000,
         response_format={"type": "json_object"},
+        reasoning_effort="none",  # skip "thinking" tokens — we want fast, deterministic JSON
     )
 
     raw = response.choices[0].message.content
     return _parse_groq_json(raw, context="the uploaded PDF(s)")
+
+
+def _compress_image_for_vision(img_bytes, max_dim=1600, jpeg_quality=82):
+    """Resize/recompress an image to keep vision API token usage low.
+    Returns (compressed_bytes, mime_type)."""
+    from PIL import Image
+    import io as _io
+    try:
+        im = Image.open(_io.BytesIO(img_bytes))
+        im = im.convert('RGB')  # drop alpha, normalise mode
+        w, h = im.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            im = im.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        out = _io.BytesIO()
+        im.save(out, format='JPEG', quality=jpeg_quality, optimize=True)
+        return out.getvalue(), 'image/jpeg'
+    except Exception:
+        # Fall back to original bytes if PIL can't process it
+        return img_bytes, 'image/jpeg'
 
 
 def extract_with_groq_vision(image_bytes_list, image_exts):
@@ -397,8 +330,8 @@ def extract_with_groq_vision(image_bytes_list, image_exts):
                 "together as one booking. Respond with ONLY the JSON object — no prose, no "
                 "markdown fences, nothing before or after the JSON.)"}]
     for img_bytes, ext in zip(image_bytes_list, image_exts):
-        mime = 'image/png' if ext.lower() == 'png' else 'image/jpeg'
-        b64 = base64.b64encode(img_bytes).decode('utf-8')
+        compressed, mime = _compress_image_for_vision(img_bytes)
+        b64 = base64.b64encode(compressed).decode('utf-8')
         content.append({
             "type": "image_url",
             "image_url": {"url": f"data:{mime};base64,{b64}"}
@@ -408,8 +341,9 @@ def extract_with_groq_vision(image_bytes_list, image_exts):
         model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": content}],
         temperature=0.1,
-        max_tokens=4000,
+        max_completion_tokens=4000,
         response_format={"type": "json_object"},
+        reasoning_effort="none",  # skip "thinking" tokens — we want fast, deterministic JSON
     )
 
     raw = response.choices[0].message.content
