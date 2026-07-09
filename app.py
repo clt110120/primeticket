@@ -303,7 +303,7 @@ def extract_with_groq_vision(image_bytes_list, image_exts):
         })
 
     response = client.chat.completions.create(
-        model="llama-3.2-90b-vision-preview",
+        model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": content}],
         temperature=0.1,
         max_tokens=3000,
