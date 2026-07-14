@@ -279,9 +279,27 @@ input[type=color]{width:36px;height:34px;padding:2px;border:0.5px solid rgba(0,0
   <!-- Step 3: Flights -->
   <div class="card">
     <p class="step">Step 3 — Flight details</p>
-    <p class="tip">Add one row per flight. Use the journey dropdown to group flights into Outbound / Return for round trips.</p>
+    <p class="tip">Add one row per flight. Leave Journey blank for a one-way trip, use the same
+      text (e.g. "Outbound Journey" / "Return Journey") to group connecting flights, or use
+      "Flight 1", "Flight 2"... for multi-city trips.</p>
+    <datalist id="journey-suggestions">
+      <option value="Outbound Journey">
+      <option value="Return Journey">
+      <option value="Flight 1">
+      <option value="Flight 2">
+      <option value="Flight 3">
+    </datalist>
     <div id="flight-rows"></div>
     <button class="btn" style="margin-top:8px;" onclick="addFlightRow()">+ Add flight</button>
+  </div>
+
+  <!-- Step 3b: Journey logos -->
+  <div class="card">
+    <p class="step">Step 3b — Journey logos <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional)</span></p>
+    <p class="tip">Different airline per leg? Attach a logo for each journey below — it'll show on
+      that leg's flight card and header. Click refresh after adding or editing flights above.</p>
+    <button class="btn" onclick="refreshJourneyLogoSlots()">🔄 Refresh journey list</button>
+    <div id="journey-logo-slots" style="margin-top:10px;"></div>
   </div>
 
   <!-- Step 4 -->
@@ -595,7 +613,11 @@ async function extractFromImages(){
     }
     const data = await resp.json();
     populateFromExtracted(data);
-    extractStatus('✅ Details filled in below — please review before generating.', 'ok');
+    if(data.warnings && data.warnings.length){
+      extractStatus('⚠️ Filled in below, but: ' + data.warnings.join(' ') + ' Please review carefully.', 'info');
+    } else {
+      extractStatus('✅ Details filled in below — please review before generating.', 'ok');
+    }
   }catch(e){
     extractStatus('❌ Error: ' + e.message, 'err');
   }
@@ -660,6 +682,9 @@ function populateFromExtracted(data){
   if(pages.length===0 || pages.every(p=>(p.flights||[]).length===0)){
     addFlightRow(); // ensure at least one empty row remains
   }
+
+  journeyLogos = {};   // reset — journeys just changed, old assignments no longer apply
+  refreshJourneyLogoSlots();
 }
 
 // ===================== IMAGE TAB: flight rows =====================
@@ -677,11 +702,8 @@ function addFlightRow(){
     </div>
     <div class="grid3">
       <div><label>Journey</label>
-        <select id="fr-journey-${id}">
-          <option value="">One-way</option>
-          <option value="Outbound Journey">Outbound</option>
-          <option value="Return Journey">Return</option>
-        </select>
+        <input type="text" id="fr-journey-${id}" list="journey-suggestions"
+          placeholder="Blank = one-way">
       </div>
       <div><label>Flight number</label><input type="text" id="fr-flightno-${id}" placeholder="e.g. QR 222"></div>
       <div><label>Cabin class</label><input type="text" id="fr-cabin-${id}" placeholder="Economy" value="Economy"></div>
@@ -783,7 +805,48 @@ function collectFlightRows(){
     if(!journeyMap[journey]){ journeyMap[journey]=[]; journeyOrder.push(journey); }
     journeyMap[journey].push(flight);
   });
-  return journeyOrder.map(j => ({ page_label: j, flights: journeyMap[j] }));
+  return journeyOrder.map(j => ({ page_label: j, flights: journeyMap[j], _journey_key: j }));
+}
+
+// ===================== Per-journey logo attachment =====================
+let journeyLogos = {};   // key: journey text ('' = one-way), value: File
+
+function getDistinctJourneys(){
+  const journeys = [];
+  document.querySelectorAll('#flight-rows .frow').forEach(row=>{
+    const id = row.id.split('-')[1];
+    const el = document.getElementById(`fr-journey-${id}`);
+    const val = el ? el.value.trim() : '';
+    if(!journeys.includes(val)) journeys.push(val);
+  });
+  return journeys;
+}
+
+function refreshJourneyLogoSlots(){
+  const journeys = getDistinctJourneys();
+  const container = document.getElementById('journey-logo-slots');
+  if(journeys.length === 0){
+    container.innerHTML = '<p class="tip">Add at least one flight above, then refresh.</p>';
+    return;
+  }
+  container.innerHTML = journeys.map((j, i) => `
+    <div class="crow" style="margin-bottom:8px;align-items:center;">
+      <span style="flex:1;font-size:13px;color:#333;">${j || '(One-way)'}</span>
+      <input type="file" accept="image/png,image/jpeg,image/jpg" class="jlogo-input"
+        data-journey="${j.replace(/"/g,'&quot;')}" style="max-width:200px;">
+      <span class="jlogo-status" style="font-size:12px;color:#888;min-width:90px;">
+        ${journeyLogos[j] ? '✅ ' + journeyLogos[j].name : 'No logo'}
+      </span>
+    </div>`).join('');
+
+  container.querySelectorAll('.jlogo-input').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const key = inp.dataset.journey;
+      if(inp.files[0]) journeyLogos[key] = inp.files[0];
+      else delete journeyLogos[key];
+      refreshJourneyLogoSlots();
+    });
+  });
 }
 
 function clearImgAll(){
@@ -796,6 +859,8 @@ function clearImgAll(){
   document.getElementById('im-policy').value='';
   document.getElementById('flight-rows').innerHTML='';
   flightRowCount=0;
+  journeyLogos={};
+  document.getElementById('journey-logo-slots').innerHTML='';
   imStatus('',''); imProgress(0);
 }
 function imStatus(msg,type){
@@ -840,8 +905,16 @@ async function runManual(){
   };
 
   const fd = new FormData();
+  if(imLogoFile) fd.append('logo', imLogoFile);   // fallback/default logo for all pages
+
+  // Attach a per-page logo where the matching journey has one assigned
+  payload.pages.forEach((p, idx) => {
+    const logoFile = journeyLogos[p._journey_key];
+    if(logoFile) fd.append(`page_logo_${idx}`, logoFile);
+    delete p._journey_key;   // internal-only, not part of the API payload
+  });
+
   fd.append('data', JSON.stringify(payload));
-  if(imLogoFile) fd.append('logo', imLogoFile);
 
   try{
     imProgress(60);
