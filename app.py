@@ -321,36 +321,103 @@ def _compress_image_for_vision(img_bytes, max_dim=1600, jpeg_quality=82):
         return img_bytes, 'image/jpeg'
 
 
-def extract_with_groq_vision(image_bytes_list, image_exts):
-    """Extract flight data from ticket screenshots/images using Groq vision."""
+def extract_flights_from_single_image(img_bytes, ext, image_index=0):
+    """Send ONE image to Groq vision and return its parsed JSON (or None on
+    failure). Splitting into one call per image avoids hitting Groq's
+    per-request size/token limit when several screenshots are uploaded
+    together, and means one bad/unreadable image never kills the whole batch."""
     client = Groq(api_key=GROQ_API_KEY)
+    compressed, mime = _compress_image_for_vision(img_bytes)
+    b64 = base64.b64encode(compressed).decode('utf-8')
 
-    content = [{"type": "text", "text": EXTRACT_PROMPT +
-                "\n(The itinerary details are in the attached image(s) below — read all of them "
-                "together as one booking. Respond with ONLY the JSON object — no prose, no "
-                "markdown fences, nothing before or after the JSON.)"}]
-    for img_bytes, ext in zip(image_bytes_list, image_exts):
-        compressed, mime = _compress_image_for_vision(img_bytes)
-        b64 = base64.b64encode(compressed).decode('utf-8')
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{b64}"}
-        })
+    content = [
+        {"type": "text", "text": EXTRACT_PROMPT +
+         "\n(This is ONE screenshot from a booking — it may show one flight or "
+         "several connecting flights within a single direction of travel. "
+         "Respond with ONLY the JSON object — no prose, no markdown fences.)"},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+    ]
 
-    response = client.chat.completions.create(
-        model="qwen/qwen3.6-27b",
-        messages=[{"role": "user", "content": content}],
-        temperature=0.1,
-        max_completion_tokens=4000,
-        response_format={"type": "json_object"},
-        reasoning_effort="none",  # skip "thinking" tokens — we want fast, deterministic JSON
-    )
+    try:
+        response = client.chat.completions.create(
+            model="qwen/qwen3.6-27b",
+            messages=[{"role": "user", "content": content}],
+            temperature=0.1,
+            max_completion_tokens=2048,
+            response_format={"type": "json_object"},
+            reasoning_effort="none",
+        )
+        raw = response.choices[0].message.content
+        return _parse_groq_json(raw, context=f"image {image_index + 1}")
+    except Exception as e:
+        app.logger.warning(f"Vision extraction failed for image {image_index + 1}: {e}")
+        return None
 
-    raw = response.choices[0].message.content
-    return _parse_groq_json(raw, context="the uploaded image(s)")
+
+def extract_with_groq_vision(image_bytes_list, image_exts):
+    """Extract flight data from ticket screenshots by calling Groq once per
+    image (never one giant combined request), then merging the results.
+
+    Page structure follows the number of images successfully read:
+      1 image  -> one-way   (1 page, no label)
+      2 images -> round trip (Outbound Journey / Return Journey)
+      3+ images -> multi-city (one page per image, "Flight 1", "Flight 2", ...)
+    """
+    per_image_results = []
+    failed_indices = []
+    for idx, (img_bytes, ext) in enumerate(zip(image_bytes_list, image_exts)):
+        result = extract_flights_from_single_image(img_bytes, ext, idx)
+        if result is None:
+            failed_indices.append(idx)
+            continue
+        per_image_results.append(result)
+
+    if not per_image_results:
+        raise ValueError("Could not read flight data from any of the uploaded image(s). "
+                          "Try clearer/higher-resolution screenshots.")
+
+    # Merge booking-level fields from the first image that has them
+    merged = {'passengers': [], 'booking_ref': '', 'all_refs': [],
+              'airline_name': '', 'brand_hex': ''}
+    for r in per_image_results:
+        if not merged['passengers'] and r.get('passengers'):
+            merged['passengers'] = r['passengers']
+        if not merged['booking_ref'] and r.get('booking_ref'):
+            merged['booking_ref'] = r['booking_ref']
+        if not merged['all_refs'] and r.get('all_refs'):
+            merged['all_refs'] = r['all_refs']
+        if not merged['airline_name'] and r.get('airline_name'):
+            merged['airline_name'] = r['airline_name']
+        if not merged['brand_hex'] and r.get('brand_hex'):
+            merged['brand_hex'] = r['brand_hex']
+
+    # Flatten each image's flights (regardless of how the model paginated them)
+    per_image_flights = []
+    for r in per_image_results:
+        flights = []
+        for p in r.get('pages', []):
+            flights.extend(p.get('flights', []))
+        per_image_flights.append(flights)
+
+    n = len(per_image_flights)
+    if n == 1:
+        pages = [{'page_label': '', 'flights': per_image_flights[0]}]
+    elif n == 2:
+        pages = [
+            {'page_label': 'Outbound Journey', 'flights': per_image_flights[0]},
+            {'page_label': 'Return Journey',   'flights': per_image_flights[1]},
+        ]
+    else:
+        pages = [{'page_label': f'Flight {i+1}', 'flights': fl}
+                  for i, fl in enumerate(per_image_flights)]
+
+    merged['pages'] = pages
+    if failed_indices:
+        merged['_warnings'] = [f"Could not read image {i+1} — it was skipped." for i in failed_indices]
+    return merged
 
 
-def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
+def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None, page_logos=None):
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
     output_path = tmp.name
     tmp.close()
@@ -381,6 +448,24 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                     for p in pages for f in p.get('flights',[])]
     all_same_airline = len(set(all_airlines)) == 1 and bool(logo_bytes)
 
+    page_logos = page_logos or {}
+
+    def resolve_page_logo(page_index):
+        """Return (bytes, ext) for this page — its own uploaded logo if
+        provided, otherwise the global fallback logo."""
+        entry = page_logos.get(page_index)
+        if entry and entry.get('bytes'):
+            return entry['bytes'], entry.get('ext')
+        return logo_bytes, logo_ext
+
+    def page_same_airline(page_index):
+        """Whether every flight on this specific page shares one airline
+        AND a logo (page-specific or global) is available for it."""
+        flights = pages[page_index].get('flights', []) if page_index < len(pages) else []
+        airlines = {f.get('operated_by','').lower().strip() for f in flights}
+        lb, _ = resolve_page_logo(page_index)
+        return len(airlines) == 1 and bool(lb)
+
     # Card logo dimensions (small — fits in 8mm card header)
     CARD_LOGO_H   = 5.5 * mm
     CARD_LOGO_MAX = 28 * mm
@@ -410,7 +495,7 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
     #               'all_flights_in_journey': [...], 'is_last_chunk': bool }
     CARDS_PER_PAGE = 2
     render_chunks = []
-    for page in pages:
+    for pi, page in enumerate(pages):
         flights    = page.get('flights', [])
         page_label = page.get('page_label', '')
         for chunk_i, start in enumerate(range(0, len(flights), CARDS_PER_PAGE)):
@@ -421,6 +506,7 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                 'is_first':               chunk_i == 0,
                 'all_flights_in_journey': flights,    # full list for dot map
                 'is_last_chunk':          (start + CARDS_PER_PAGE) >= len(flights),
+                'page_index':             pi,
             })
 
     total_chunks = len(render_chunks)
@@ -479,8 +565,9 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cv.drawString(MARGIN, H - T - 16*mm, airline_name_str)
 
             # Logo (top right) — skip for direct RT to keep header compact
-            if logo_bytes and not is_direct_rt:
-                logo_bottom_y = draw_logo(cv, logo_bytes, logo_ext, W, H, MARGIN, MTOP,
+            page_logo_bytes, page_logo_ext = resolve_page_logo(chunk['page_index'])
+            if page_logo_bytes and not is_direct_rt:
+                logo_bottom_y = draw_logo(cv, page_logo_bytes, page_logo_ext, W, H, MARGIN, MTOP,
                                           colors.HexColor("#4E4E4E"))
             else:
                 # No logo: set logo_bottom_y just below airline name + ETR label
@@ -738,7 +825,8 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
             cv.setFillColor(BRAND); cv.setFont("Helvetica-Bold", 7.5); cv.drawString(infox+18*mm, ry2, flight.get('status','CONFIRMED'))
 
             # ── Right side: logo + airline name + bordered flight number ───
-            if all_same_airline and logo_bytes:
+            card_logo_bytes, _card_logo_ext = resolve_page_logo(chunk['page_index'])
+            if page_same_airline(chunk['page_index']) and card_logo_bytes:
                 try:
                     from reportlab.lib.utils import ImageReader
                     import io as _io
@@ -748,7 +836,7 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                     cx_area   = rx_area_x + rx_area_w / 2  # centre of area
 
                     # ── Logo (fit to available width, cap height at 14mm) ──
-                    ir     = ImageReader(_io.BytesIO(logo_bytes))
+                    ir     = ImageReader(_io.BytesIO(card_logo_bytes))
                     iw, ih = ir.getSize()
                     # Scale to fill available width first
                     lg_w   = rx_area_w
@@ -759,7 +847,7 @@ def generate_eticket_pdf(data, logo_bytes=None, logo_ext=None):
                         lg_w = iw * (lg_h / ih)
                     lg_x = cx_area - lg_w / 2
                     lg_y = bt - 3*mm - lg_h
-                    cv.drawImage(ImageReader(_io.BytesIO(logo_bytes)),
+                    cv.drawImage(ImageReader(_io.BytesIO(card_logo_bytes)),
                                  lg_x, lg_y, width=lg_w, height=lg_h,
                                  preserveAspectRatio=True, mask='auto')
 
@@ -1098,6 +1186,8 @@ def extract_image():
                     data['brand_hex'] = hx
                     break
 
+        if '_warnings' in data:
+            data['warnings'] = data.pop('_warnings')
         return jsonify(data)
 
     except (json.JSONDecodeError, ValueError) as e:
@@ -1120,13 +1210,28 @@ def generate_manual():
         if not data.get('pages') or not any(p.get('flights') for p in data['pages']):
             return jsonify({'error': 'At least one flight is required'}), 400
 
-        # Read uploaded logo if provided
+        # Read uploaded logo if provided (fallback/default logo for all pages)
         logo_bytes = None
         logo_ext   = None
         logo_file  = request.files.get('logo')
         if logo_file and logo_file.filename:
             logo_bytes = logo_file.read()
             logo_ext   = logo_file.filename.rsplit('.', 1)[-1].lower()
+
+        # Read per-page/journey logo overrides (page_logo_0, page_logo_1, ...)
+        page_logos = {}
+        for key in request.files:
+            if key.startswith('page_logo_'):
+                try:
+                    idx = int(key.rsplit('_', 1)[-1])
+                except ValueError:
+                    continue
+                f = request.files[key]
+                if f and f.filename:
+                    page_logos[idx] = {
+                        'bytes': f.read(),
+                        'ext': f.filename.rsplit('.', 1)[-1].lower(),
+                    }
 
         checked_baggage = data.pop('checked_baggage', '').strip()
         meal_included   = bool(data.pop('meal_included', False))
@@ -1161,7 +1266,7 @@ def generate_manual():
                                     ('status','CONFIRMED'), ('dep_terminal',''), ('arr_terminal','')]:
                     flight.setdefault(k, default)
 
-        pdf_path  = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext)
+        pdf_path  = generate_eticket_pdf(data, logo_bytes=logo_bytes, logo_ext=logo_ext, page_logos=page_logos)
         pnr       = re.sub(r'[^A-Z0-9]', '', data.get('booking_ref','').upper()) or 'TICKET'
         firstname = data.get('passenger_name','PASSENGER').strip().upper().split()[0]
         filename  = f"{pnr}_{firstname}.pdf"
