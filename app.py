@@ -1,4 +1,5 @@
 import os, json, re, tempfile, zipfile, base64
+from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template
 from groq import Groq
 import fitz  # PyMuPDF
@@ -274,6 +275,15 @@ def _parse_groq_json(raw_content, context=""):
                       f"Raw response started with: {raw[:200]!r}")
 
 
+def _current_date_hint():
+    now = datetime.now()
+    return (f"\n\nTODAY'S DATE IS {now.strftime('%d %b %Y')}. If a flight date in the document/image "
+            f"does NOT show a year, use {now.year} as the year — never default to 2024 or any other "
+            f"year. If a dateless flight's month/day has already passed this year and the booking "
+            f"context implies a future trip, use {now.year + 1} instead. Always double check every "
+            f"extracted date's year makes sense relative to today's date above.")
+
+
 def extract_with_groq(pdf_bytes_list):
     """Extract flight data from PDF text using Groq."""
     client = Groq(api_key=GROQ_API_KEY)
@@ -286,7 +296,7 @@ def extract_with_groq(pdf_bytes_list):
             combined_text += f"\n--- DOCUMENT {i+1} ---\n"
         combined_text += text + "\n"
 
-    prompt = EXTRACT_PROMPT + combined_text
+    prompt = EXTRACT_PROMPT + combined_text + _current_date_hint()
 
     response = client.chat.completions.create(
         model="qwen/qwen3.6-27b",
@@ -334,7 +344,8 @@ def extract_flights_from_single_image(img_bytes, ext, image_index=0):
         {"type": "text", "text": EXTRACT_PROMPT +
          "\n(This is ONE screenshot from a booking — it may show one flight or "
          "several connecting flights within a single direction of travel. "
-         "Respond with ONLY the JSON object — no prose, no markdown fences.)"},
+         "Respond with ONLY the JSON object — no prose, no markdown fences.)" +
+         _current_date_hint()},
         {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
     ]
 
